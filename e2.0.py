@@ -534,166 +534,70 @@ def main():
 
 
 # ===== 统计分析页面 =====
-
 def show_statistics():
     st.title("📊 评分统计分析")
-
+    
     conn = sqlite3.connect(DB_PATH)
-
+    
     # 总体统计
     st.subheader("📈 总体统计")
-
     total_images = pd.read_sql("SELECT COUNT(*) as count FROM images", conn)['count'][0]
     total_evaluations = pd.read_sql("SELECT COUNT(*) as count FROM evaluations", conn)['count'][0]
-    evaluators = \
-        pd.read_sql("SELECT COUNT(DISTINCT evaluator_id) as count FROM evaluations", conn)['count'][0]
-
+    evaluators = pd.read_sql("SELECT COUNT(DISTINCT evaluator_id) as count FROM evaluations", conn)['count'][0]
+    
     col1, col2, col3 = st.columns(3)
     col1.metric("总图片数", total_images)
     col2.metric("总评分数", total_evaluations)
     col3.metric("评分员数", evaluators)
-
+    
     st.markdown("---")
-
-    # 模型对比
+    
+    # 模型对比 - 使用表格代替图表
     st.subheader("🔍 模型质量对比")
-
+    
     model_stats = pd.read_sql('''
-                    SELECT 
-                        i.model_name,
-                        i.quality_tier,
-                        COUNT(e.id) as eval_count,
-                        AVG(e.overall_quality) as avg_quality,
-                        AVG(e.clarity) as avg_clarity,
-                        AVG(e.detail_richness) as avg_detail,
-                        AVG(e.prompt_match) as avg_prompt_match,
-                        AVG(e.game_usability) as avg_game_use
-                    FROM images i
-                    LEFT JOIN evaluations e ON i.id = e.image_id
-                    GROUP BY i.model_id, i.model_name, i.quality_tier
-                ''', conn)
-
+        SELECT 
+            i.model_name,
+            i.quality_tier,
+            COUNT(e.id) as eval_count,
+            AVG(e.overall_quality) as avg_quality,
+            AVG(e.clarity) as avg_clarity,
+            AVG(e.detail_richness) as avg_detail,
+            AVG(e.prompt_match) as avg_prompt_match,
+            AVG(e.game_usability) as avg_game_use
+        FROM images i
+        LEFT JOIN evaluations e ON i.id = e.image_id
+        GROUP BY i.model_id, i.model_name, i.quality_tier
+    ''', conn)
+    
     if len(model_stats) > 0:
-        # 雷达图
-        fig = go.Figure()
-
-        for idx, row in model_stats.iterrows():
-            fig.add_trace(go.Scatterpolar(
-                r=[
-                    row['avg_clarity'] or 0,
-                    row['avg_detail'] or 0,
-                    row['avg_prompt_match'] or 0,
-                    row['avg_game_use'] or 0,
-                    row['avg_quality'] or 0
-                ],
-                theta=['清晰度', '细节', 'Prompt匹配', '游戏适用', '整体质量'],
-                fill='toself',
-                name=row['model_name']
-            ))
-
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 5])),
-            showlegend=True,
-            title="模型质量雷达图"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # 数据表
-        st.dataframe(model_stats, use_container_width=True)
-
+        st.dataframe(model_stats.round(2), use_container_width=True)
+    
     st.markdown("---")
-
-    # 等级分布
+    
+    # 等级分布 - 使用Streamlit内置图表
     st.subheader("📊 等级分布")
-
+    
     grade_dist = pd.read_sql('''
-                    SELECT 
-                        i.model_name,
-                        e.grade,
-                        COUNT(*) as count
-                    FROM evaluations e
-                    JOIN images i ON e.image_id = i.id
-                    GROUP BY i.model_name, e.grade
-                ''', conn)
-
+        SELECT 
+            i.model_name,
+            e.grade,
+            COUNT(*) as count
+        FROM evaluations e
+        JOIN images i ON e.image_id = i.id
+        GROUP BY i.model_name, e.grade
+    ''', conn)
+    
     if len(grade_dist) > 0:
-        fig = px.bar(
-            grade_dist,
-            x='model_name',
-            y='count',
-            color='grade',
-            title="各模型等级分布",
-            labels={'model_name': '模型', 'count': '数量', 'grade': '等级'}
+        # 使用Streamlit内置图表
+        pivot_df = grade_dist.pivot_table(
+            index='model_name', 
+            columns='grade', 
+            values='count', 
+            fill_value=0
         )
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("---")
-
-    # 缺陷统计
-    st.subheader("⚠️ 常见缺陷统计")
-
-    defects = pd.read_sql('''
-                    SELECT 
-                        i.model_name,
-                        e.major_defects,
-                        COUNT(*) as count
-                    FROM evaluations e
-                    JOIN images i ON e.image_id = i.id
-                    WHERE e.major_defects != ''
-                    GROUP BY i.model_name, e.major_defects
-                    ORDER BY count DESC
-                    LIMIT 20
-                ''', conn)
-
-    if len(defects) > 0:
-        st.dataframe(defects, use_container_width=True)
-
-    st.markdown("---")
-
-    # 导出功能
-    st.subheader("💾 导出数据")
-
-    if st.button("导出完整评分数据 (Excel)", use_container_width=True):
-        export_df = pd.read_sql('''
-                        SELECT 
-                            i.prompt_id,
-                            i.prompt_text,
-                            i.type,
-                            i.style,
-                            i.model_name,
-                            i.quality_tier,
-                            i.image_number,
-                            e.evaluator_name,
-                            e.clarity,
-                            e.detail_richness,
-                            e.color_accuracy,
-                            e.lighting_quality,
-                            e.composition,
-                            e.prompt_match,
-                            e.style_consistency,
-                            e.subject_completeness,
-                            e.game_usability,
-                            e.direct_use,
-                            e.needs_fix,
-                            e.major_defects,
-                            e.minor_issues,
-                            e.overall_quality,
-                            e.grade,
-                            e.notes,
-                            e.evaluation_time
-                        FROM evaluations e
-                        JOIN images i ON e.image_id = i.id
-                        ORDER BY i.prompt_id, i.model_id, i.image_number
-                    ''', conn)
-
-        export_path = os.path.join(EVALUATION_DIR,
-                                   f"evaluation_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-        os.makedirs(EVALUATION_DIR, exist_ok=True)
-        export_df.to_excel(export_path, index=False)
-
-        st.success(f"✅ 已导出到: {export_path}")
-
+        st.bar_chart(pivot_df)
+    
     conn.close()
 
 
@@ -711,3 +615,4 @@ if __name__ == "__main__":
     else:
 
         show_statistics()
+

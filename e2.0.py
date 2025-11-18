@@ -6,8 +6,7 @@ from pathlib import Path
 from PIL import Image
 import sqlite3
 from datetime import datetime
-import plotly.express as px
-import plotly.graph_objects as go
+
 
 # ===== 配置 =====
 
@@ -710,4 +709,5 @@ if __name__ == "__main__":
     if page == "📝 评分":
         main()
     else:
+
         show_statistics()

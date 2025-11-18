@@ -95,85 +95,102 @@ def init_database():
 
 
 def load_images_to_db():
-    """自动扫描图片目录并批量导入数据库"""
-    conn = sqlite3.connect(D:\ai_dataset_project\images)
+    """自动扫描本地图片目录并批量导入数据库"""
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     loaded_count = 0
+    # 所有模型目录
     models = ['dalle3', 'sd15', 'sdxl_turbo', 'dreamshaper']
     
     for model_id in models:
-        model_dir = os.path.join(OUTPUT_DIR, model_id)
+        # 使用你的实际路径
+        model_dir = os.path.join("D:/ai_dataset_project/images", model_id)
+        
         if not os.path.exists(model_dir):
             st.warning(f"⚠️ 模型目录不存在: {model_dir}")
             continue
             
         st.info(f"📁 扫描 {model_id} 模型的图片...")
         
-        # 获取所有PNG文件
-        png_files = [f for f in os.listdir(model_dir) if f.endswith('.png')]
-        
-        for filename in png_files:
-            filepath = os.path.join(model_dir, filename)
+        try:
+            # 获取所有PNG文件
+            png_files = [f for f in os.listdir(model_dir) if f.endswith('.png')]
+            st.write(f"找到 {len(png_files)} 张PNG图片")
             
-            # 检查是否已存在
-            cursor.execute("SELECT id FROM images WHERE filepath = ?", (filepath,))
-            if cursor.fetchone():
-                continue
-            
-            # 解析文件名
-            try:
-                base_name = filename.replace('.png', '')
-                parts = base_name.split('_')
+            for filename in png_files:
+                filepath = os.path.join(model_dir, filename)
                 
-                # 假设格式: {prompt_id}_{model}_{number}.png
-                if len(parts) >= 3:
-                    # 提取图片编号（最后一部分）
-                    image_number = int(parts[-1])
-                    # 模型名是倒数第二部分
-                    file_model = parts[-2]
-                    # 剩余部分是prompt_id
-                    prompt_id = '_'.join(parts[:-2])
+                # 检查是否已存在
+                cursor.execute("SELECT id FROM images WHERE filepath = ?", (filepath,))
+                if cursor.fetchone():
+                    continue
+                
+                # 解析文件名
+                try:
+                    base_name = filename.replace('.png', '')
+                    parts = base_name.split('_')
                     
-                    # 读取元数据文件
-                    meta_path = filepath.replace('.png', '_meta.json')
-                    metadata = {}
-                    if os.path.exists(meta_path):
-                        with open(meta_path, 'r', encoding='utf-8') as f:
-                            metadata = json.load(f)
-                    
-                    # 插入数据库
-                    cursor.execute('''
-                        INSERT INTO images (
-                            prompt_id, model_id, image_number, filepath,
-                            prompt_text, type, style, model_name, quality_tier, generation_time
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        prompt_id,
-                        model_id,
-                        image_number,
-                        filepath,
-                        metadata.get('prompt', ''),
-                        metadata.get('type', ''),
-                        metadata.get('style', ''),
-                        metadata.get('model_name', ''),
-                        metadata.get('quality_tier', ''),
-                        metadata.get('generation_time', '')
-                    ))
-                    
-                    loaded_count += 1
-                    
-                    # 每100条提交一次，避免事务过大
-                    if loaded_count % 100 == 0:
-                        conn.commit()
-                        st.info(f"✅ 已加载 {loaded_count} 张图片...")
+                    if len(parts) >= 3:
+                        # 提取图片编号（最后一部分）
+                        image_number = int(parts[-1])
+                        # 模型名是倒数第二部分
+                        file_model = parts[-2]
+                        # 剩余部分是prompt_id
+                        prompt_id = '_'.join(parts[:-2])
                         
-            except Exception as e:
-                st.error(f"❌ 处理文件 {filename} 时出错: {e}")
-                continue
+                        # 读取元数据文件
+                        meta_path = filepath.replace('.png', '_meta.json')
+                        metadata = {}
+                        if os.path.exists(meta_path):
+                            try:
+                                with open(meta_path, 'r', encoding='utf-8') as f:
+                                    metadata = json.load(f)
+                            except Exception as e:
+                                st.warning(f"读取元数据文件失败 {meta_path}: {e}")
+                        
+                        # 插入数据库
+                        cursor.execute('''
+                            INSERT INTO images (
+                                prompt_id, model_id, image_number, filepath,
+                                prompt_text, type, style, model_name, quality_tier, generation_time
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            prompt_id,
+                            model_id,
+                            image_number,
+                            filepath,
+                            metadata.get('prompt', f'Prompt: {prompt_id}'),
+                            metadata.get('type', 'unknown'),
+                            metadata.get('style', 'unknown'),
+                            metadata.get('model_name', model_id),
+                            metadata.get('quality_tier', 'medium'),
+                            metadata.get('generation_time', datetime.now().isoformat())
+                        ))
+                        
+                        loaded_count += 1
+                        
+                        # 每100条提交一次，避免事务过大
+                        if loaded_count % 100 == 0:
+                            conn.commit()
+                            st.success(f"✅ 已加载 {loaded_count} 张图片...")
+                            
+                except Exception as e:
+                    st.error(f"❌ 处理文件 {filename} 时出错: {e}")
+                    continue
+        
+        except Exception as e:
+            st.error(f"❌ 扫描目录 {model_dir} 时出错: {e}")
+            continue
     
     conn.commit()
     conn.close()
+    
+    if loaded_count > 0:
+        st.success(f"🎉 成功加载 {loaded_count} 张图片到数据库！")
+    else:
+        st.info("📊 数据库已包含所有图片记录")
+    
     return loaded_count
 
 def save_evaluation(image_id, evaluator_id, evaluator_name, scores):
@@ -631,6 +648,7 @@ if __name__ == "__main__":
     else:
 
         show_statistics()
+
 
 
 

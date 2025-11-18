@@ -95,71 +95,86 @@ def init_database():
 
 
 def load_images_to_db():
-    """扫描硬盘图片并加载到数据库"""
+    """自动扫描图片目录并批量导入数据库"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    models = ['dalle3', 'sd15', 'sdxl_turbo', 'dreamshaper']
+    
     loaded_count = 0
-
+    models = ['dalle3', 'sd15', 'sdxl_turbo', 'dreamshaper']
+    
     for model_id in models:
         model_dir = os.path.join(OUTPUT_DIR, model_id)
         if not os.path.exists(model_dir):
+            st.warning(f"⚠️ 模型目录不存在: {model_dir}")
             continue
-
-        for filename in os.listdir(model_dir):
-            if not filename.endswith('.png'):
-                continue
-
+            
+        st.info(f"📁 扫描 {model_id} 模型的图片...")
+        
+        # 获取所有PNG文件
+        png_files = [f for f in os.listdir(model_dir) if f.endswith('.png')]
+        
+        for filename in png_files:
             filepath = os.path.join(model_dir, filename)
-
+            
             # 检查是否已存在
             cursor.execute("SELECT id FROM images WHERE filepath = ?", (filepath,))
             if cursor.fetchone():
                 continue
-
-            # 解析文件名: char_real_01_dalle3_1.png
-            parts = filename.replace('.png', '').split('_')
-            if len(parts) < 3:
+            
+            # 解析文件名
+            try:
+                base_name = filename.replace('.png', '')
+                parts = base_name.split('_')
+                
+                # 假设格式: {prompt_id}_{model}_{number}.png
+                if len(parts) >= 3:
+                    # 提取图片编号（最后一部分）
+                    image_number = int(parts[-1])
+                    # 模型名是倒数第二部分
+                    file_model = parts[-2]
+                    # 剩余部分是prompt_id
+                    prompt_id = '_'.join(parts[:-2])
+                    
+                    # 读取元数据文件
+                    meta_path = filepath.replace('.png', '_meta.json')
+                    metadata = {}
+                    if os.path.exists(meta_path):
+                        with open(meta_path, 'r', encoding='utf-8') as f:
+                            metadata = json.load(f)
+                    
+                    # 插入数据库
+                    cursor.execute('''
+                        INSERT INTO images (
+                            prompt_id, model_id, image_number, filepath,
+                            prompt_text, type, style, model_name, quality_tier, generation_time
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        prompt_id,
+                        model_id,
+                        image_number,
+                        filepath,
+                        metadata.get('prompt', ''),
+                        metadata.get('type', ''),
+                        metadata.get('style', ''),
+                        metadata.get('model_name', ''),
+                        metadata.get('quality_tier', ''),
+                        metadata.get('generation_time', '')
+                    ))
+                    
+                    loaded_count += 1
+                    
+                    # 每100条提交一次，避免事务过大
+                    if loaded_count % 100 == 0:
+                        conn.commit()
+                        st.info(f"✅ 已加载 {loaded_count} 张图片...")
+                        
+            except Exception as e:
+                st.error(f"❌ 处理文件 {filename} 时出错: {e}")
                 continue
-
-            image_number = int(parts[-1])
-            model = parts[-2]
-            prompt_id = '_'.join(parts[:-2])
-
-            # 读取元数据
-            meta_path = filepath.replace('.png', '_meta.json')
-            metadata = {}
-            if os.path.exists(meta_path):
-                with open(meta_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
-
-            # 插入数据库
-            cursor.execute('''
-                INSERT INTO images (
-                    prompt_id, model_id, image_number, filepath,
-                    prompt_text, type, style, model_name, quality_tier, generation_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                prompt_id,
-                model_id,
-                image_number,
-                filepath,
-                metadata.get('prompt', ''),
-                metadata.get('type', ''),
-                metadata.get('style', ''),
-                metadata.get('model_name', ''),
-                metadata.get('quality_tier', ''),
-                metadata.get('generation_time', '')
-            ))
-
-            loaded_count += 1
-
+    
     conn.commit()
     conn.close()
-
     return loaded_count
-
 
 def save_evaluation(image_id, evaluator_id, evaluator_name, scores):
     """保存评分"""
@@ -241,47 +256,7 @@ def get_evaluation(image_id, evaluator_id):
         columns = [desc[0] for desc in cursor.description]
         return dict(zip(columns, result))
     return None
-def create_test_data():
-    """创建测试数据用于演示"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
     
-    # 检查是否已有数据
-    cursor.execute("SELECT COUNT(*) FROM images")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        st.info("正在创建测试数据...")
-        
-        # 插入测试图片数据
-        test_images = [
-            ('char_real_01', 'dalle3', 1, './test_images/char1.png', 
-             '一个勇敢的骑士，身穿铠甲，手持长剑', 'character', 'realistic', 
-             'DALL-E 3', 'high', '2024-01-01T10:00:00'),
-            ('char_anime_02', 'sd15', 1, './test_images/char2.png', 
-             '可爱的魔法少女，长发飘飘', 'character', 'anime', 
-             'Stable Diffusion 1.5', 'medium', '2024-01-01T11:00:00'),
-            ('env_fantasy_01', 'sdxl_turbo', 1, './test_images/env1.png', 
-             '神秘的魔法森林，充满发光植物', 'environment', 'fantasy', 
-             'SDXL Turbo', 'high', '2024-01-01T12:00:00'),
-            ('item_weapon_01', 'dreamshaper', 1, './test_images/item1.png', 
-             '传说中的圣剑，镶嵌宝石', 'item', 'realistic', 
-             'DreamShaper', 'medium', '2024-01-01T13:00:00')
-        ]
-        
-        for img in test_images:
-            cursor.execute('''
-                INSERT INTO images (
-                    prompt_id, model_id, image_number, filepath,
-                    prompt_text, type, style, model_name, quality_tier, generation_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', img)
-        
-        conn.commit()
-        st.success(f"✅ 已创建 {len(test_images)} 条测试数据")
-    
-    conn.close()
-
 # ===== Streamlit 界面 =====
 
 def main():
@@ -307,8 +282,6 @@ def main():
             loaded = load_images_to_db()
             st.success(f"✅ 已加载 {loaded} 张图片到数据库")
     
-    # 添加测试数据创建
-    create_test_data()
 
     # 侧边栏：评分员信息
     st.sidebar.title("🎮 评分系统")
@@ -658,5 +631,6 @@ if __name__ == "__main__":
     else:
 
         show_statistics()
+
 
 

@@ -96,7 +96,7 @@ def init_database():
 
 def load_images_to_db():
     """自动扫描图片目录并批量导入数据库"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(D:\ai_dataset_project\images)
     cursor = conn.cursor()
     
     loaded_count = 0
@@ -631,6 +631,7 @@ if __name__ == "__main__":
     else:
 
         show_statistics()
+
 
 
 

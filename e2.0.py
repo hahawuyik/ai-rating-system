@@ -241,7 +241,46 @@ def get_evaluation(image_id, evaluator_id):
         columns = [desc[0] for desc in cursor.description]
         return dict(zip(columns, result))
     return None
-
+def create_test_data():
+    """创建测试数据用于演示"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # 检查是否已有数据
+    cursor.execute("SELECT COUNT(*) FROM images")
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        st.info("正在创建测试数据...")
+        
+        # 插入测试图片数据
+        test_images = [
+            ('char_real_01', 'dalle3', 1, './test_images/char1.png', 
+             '一个勇敢的骑士，身穿铠甲，手持长剑', 'character', 'realistic', 
+             'DALL-E 3', 'high', '2024-01-01T10:00:00'),
+            ('char_anime_02', 'sd15', 1, './test_images/char2.png', 
+             '可爱的魔法少女，长发飘飘', 'character', 'anime', 
+             'Stable Diffusion 1.5', 'medium', '2024-01-01T11:00:00'),
+            ('env_fantasy_01', 'sdxl_turbo', 1, './test_images/env1.png', 
+             '神秘的魔法森林，充满发光植物', 'environment', 'fantasy', 
+             'SDXL Turbo', 'high', '2024-01-01T12:00:00'),
+            ('item_weapon_01', 'dreamshaper', 1, './test_images/item1.png', 
+             '传说中的圣剑，镶嵌宝石', 'item', 'realistic', 
+             'DreamShaper', 'medium', '2024-01-01T13:00:00')
+        ]
+        
+        for img in test_images:
+            cursor.execute('''
+                INSERT INTO images (
+                    prompt_id, model_id, image_number, filepath,
+                    prompt_text, type, style, model_name, quality_tier, generation_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', img)
+        
+        conn.commit()
+        st.success(f"✅ 已创建 {len(test_images)} 条测试数据")
+    
+    conn.close()
 
 # ===== Streamlit 界面 =====
 
@@ -267,6 +306,9 @@ def main():
             init_database()
             loaded = load_images_to_db()
             st.success(f"✅ 已加载 {loaded} 张图片到数据库")
+    
+    # 添加测试数据创建
+    create_test_data()
 
     # 侧边栏：评分员信息
     st.sidebar.title("🎮 评分系统")
@@ -533,6 +575,7 @@ def main():
                         st.rerun()
 
 
+
 # ===== 统计分析页面 =====
 def show_statistics():
     st.title("📊 评分统计分析")
@@ -615,4 +658,5 @@ if __name__ == "__main__":
     else:
 
         show_statistics()
+
 

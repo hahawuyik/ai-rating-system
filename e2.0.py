@@ -7,6 +7,12 @@ from PIL import Image
 import sqlite3
 from datetime import datetime
 
+# 🔥 这一行必须放在所有 st. 命令的最前面！
+st.set_page_config(
+    page_title="AI游戏图像质量评价系统",
+    page_icon="🎮",
+    layout="wide"
+)
 
 # ===== 配置 =====
 
@@ -277,11 +283,6 @@ def get_evaluation(image_id, evaluator_id):
 # ===== Streamlit 界面 =====
 
 def main():
-    st.set_page_config(
-        page_title="AI游戏图像质量评价系统",
-        page_icon="🎮",
-        layout="wide"
-    )
 
     # 初始化session_state
     if 'page' not in st.session_state:
@@ -648,6 +649,7 @@ if __name__ == "__main__":
     else:
 
         show_statistics()
+
 
 
 

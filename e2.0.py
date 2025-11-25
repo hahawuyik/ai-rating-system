@@ -20,7 +20,7 @@ st.set_page_config(
 # ===== Cloudinary 配置 =====
 # 把下面的值换成你自己Dashboard里的信息
 cloudinary.config(
-    cloud_name="root",
+    cloud_name="dwskobcad",
     api_key="676912851999589",
     api_secret="YIY48Z9VOM1zHfPWZvFKlHpyXzk",
     secure=True
@@ -413,3 +413,4 @@ if __name__ == "__main__":
         main()
     else:
         show_statistics()
+

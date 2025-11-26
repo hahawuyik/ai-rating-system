@@ -146,8 +146,8 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
 
     try:
         # 先测试API连通性，验证权限
-        account_info = cloudinary.api.info()
-        st.success(f"✅ Cloudinary API连通正常！当前账户：{account_info['cloud_name']}")
+        cloudinary.api.ping()  # ping()方法是更通用的连接测试，如果失败会直接抛出异常
+        st.success(f"✅ Cloudinary API连通正常！当前账户：{cloudinary.config().cloud_name}")
 
         # 分页拉取所有资源（Cloudinary单次最多返回500条）
         next_cursor = None
@@ -654,4 +654,5 @@ def main_rating_page():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 

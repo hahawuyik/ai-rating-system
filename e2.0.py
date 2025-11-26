@@ -128,10 +128,9 @@ def init_database():
     conn.close()
 
 # ===== 从Cloudinary API拉取图片资源并初始化数据库 =====
-def load_images_from_cloudinary_to_db():
+def load_images_from_cloudinary_to_db(force_refresh=False):
     """
-    无需本地文件，直接从Cloudinary拉取所有图片资源到数据库
-    适配云端/本地所有环境
+    从Cloudinary拉取资源并初始化数据库，支持强制刷新、调试日志
     """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -139,10 +138,22 @@ def load_images_from_cloudinary_to_db():
     loaded_count = 0
     st.info(f"🔍 从Cloudinary拉取资源：{CLOUDINARY_ROOT_FOLDER}/*")
 
+    # 强制刷新：清空现有images表，重新拉取所有资源
+    if force_refresh:
+        st.warning("⚠️ 强制刷新模式：清空现有图片记录")
+        cursor.execute("DELETE FROM images")
+        conn.commit()
+
     try:
+        # 先测试API连通性，验证权限
+        account_info = cloudinary.api.info()
+        st.success(f"✅ Cloudinary API连通正常！当前账户：{account_info['cloud_name']}")
+
         # 分页拉取所有资源（Cloudinary单次最多返回500条）
         next_cursor = None
+        total_cloud_resources = 0
         while True:
+            st.info(f"🔄 拉取资源分页，游标：{next_cursor or '初始页'}")
             resources = cloudinary.api.resources(
                 type="upload",
                 prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
@@ -151,13 +162,22 @@ def load_images_from_cloudinary_to_db():
                 resource_type="image"
             )
             next_cursor = resources.get("next_cursor")
+            batch_count = len(resources["resources"])
+            total_cloud_resources += batch_count
+            st.info(f"📥 本页拉取到 {batch_count} 个资源，累计 {total_cloud_resources} 个")
+
+            if batch_count == 0:
+                st.warning("⚠️ 当前分页未拉取到任何资源")
+                break
 
             for res in resources["resources"]:
-                # Cloudinary的public_id不含扩展名，格式为：ai-rating-images/dalle3/xxx
                 public_id = res["public_id"]
                 path_parts = public_id.split("/")
                 
-                # 校验路径格式是否符合预期：根文件夹/模型ID/文件名
+                # 打印调试信息，确认资源路径是否正确
+                st.debug(f"📄 处理资源：public_id={public_id}，路径拆分={path_parts}")
+                
+                # 校验路径格式：根文件夹/模型ID/文件名（必须符合这个结构）
                 if len(path_parts) < 3:
                     st.warning(f"⚠️ 跳过格式错误的资源：{public_id}")
                     continue
@@ -165,17 +185,18 @@ def load_images_from_cloudinary_to_db():
                 model_id = path_parts[1]
                 filename_without_ext = path_parts[2]
 
-                # 检查数据库中是否已存在该资源
+                # 检查数据库中是否已存在，强制刷新则覆盖
                 cursor.execute("SELECT id FROM images WHERE filepath = ?", (public_id,))
-                if cursor.fetchone():
+                if cursor.fetchone() and not force_refresh:
+                    st.debug(f"⏭️ 资源已存在，跳过：{public_id}")
                     continue
 
-                # 解析文件名中的元数据（和你原有的命名规则对齐）
+                # 解析文件名元数据
                 parts = filename_without_ext.split("_")
                 image_number = int(parts[-1]) if parts[-1].isdigit() else 0
                 prompt_id = '_'.join(parts[:-2]) if len(parts)>=3 else filename_without_ext
 
-                # 从Cloudinary资源的自定义元数据中读取信息（如果上传时附带）
+                # 读取Cloudinary资源的自定义元数据
                 context = res.get("context", {}).get("custom", {})
                 metadata = {
                     "prompt": context.get("prompt", f"Prompt: {prompt_id}"),
@@ -186,9 +207,9 @@ def load_images_from_cloudinary_to_db():
                     "generation_time": res.get("created_at", datetime.now().isoformat())
                 }
 
-                # 插入数据库
+                # 插入/替换数据库记录
                 cursor.execute('''
-                    INSERT INTO images (
+                    INSERT OR REPLACE INTO images (
                         prompt_id, model_id, image_number, filepath,
                         prompt_text, type, style, model_name, quality_tier, generation_time
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -196,7 +217,7 @@ def load_images_from_cloudinary_to_db():
                     prompt_id,
                     model_id,
                     image_number,
-                    public_id,  # 存储Cloudinary的public_id
+                    public_id,
                     metadata["prompt"],
                     metadata["type"],
                     metadata["style"],
@@ -206,25 +227,31 @@ def load_images_from_cloudinary_to_db():
                 ))
                 
                 loaded_count += 1
-                if loaded_count % 100 == 0:
+                if loaded_count % 50 == 0:
                     conn.commit()
                     st.success(f"✅ 已加载 {loaded_count} 张图片到数据库...")
             
             if not next_cursor:
                 break
 
+        # 关键：精准判断结果
+        if total_cloud_resources == 0:
+            st.error(f"❌ Cloudinary中未找到任何以 `{CLOUDINARY_ROOT_FOLDER}/` 为前缀的图片资源！")
+        elif loaded_count == 0 and not force_refresh:
+            st.info("📊 数据库已包含所有Cloudinary图片记录")
+        else:
+            st.success(f"🎉 成功从Cloudinary加载/更新 {loaded_count} 张图片到数据库！Cloudinary中总计 {total_cloud_resources} 个资源")
+
     except Exception as e:
         st.error(f"❌ 拉取Cloudinary资源失败: {str(e)}")
+        # 打印完整错误栈，方便调试
+        import traceback
+        st.error(f"🔍 错误栈详情：{traceback.format_exc()}")
         conn.close()
         return 0
     
     conn.commit()
     conn.close()
-    
-    if loaded_count > 0:
-        st.success(f"🎉 成功从Cloudinary加载 {loaded_count} 张图片到数据库！")
-    else:
-        st.info("📊 数据库已包含所有Cloudinary图片记录")
     
     return loaded_count
 
@@ -627,3 +654,4 @@ def main_rating_page():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+

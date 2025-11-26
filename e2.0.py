@@ -21,8 +21,8 @@ st.set_page_config(
 # 替换为你自己的Cloudinary Dashboard信息
 cloudinary.config(
     cloud_name="dwskobcad",
-    api_key="676912851999589",
-    api_secret="YIY48Z9VOM1zHfPWZvFKlHpyXzk",
+    api_key="287449858162338",
+    api_secret="KnHA6g_T2eNtvdFOcGJ8D1UdzqY",
     secure=True
 )
 

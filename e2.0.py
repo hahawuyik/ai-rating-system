@@ -159,7 +159,7 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                 prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
                 max_results=500,
                 next_cursor=next_cursor,
-                resource_type="all"
+                resource_type="image"
             )
             next_cursor = resources.get("next_cursor")
             batch_count = len(resources["resources"])
@@ -654,6 +654,7 @@ def main_rating_page():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 
 
 

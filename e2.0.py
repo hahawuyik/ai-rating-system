@@ -651,9 +651,162 @@ def main_rating_page():
                     # 刷新页面以显示最新评分
                     st.rerun()
 
+# 在现有代码中添加诊断页面函数
+def show_diagnostics():
+    st.title("🔍 Cloudinary诊断工具")
+    
+    # 显示当前配置
+    st.subheader("当前配置")
+    st.write(f"- Cloud Name: `{cloudinary.config().cloud_name}`")
+    st.write(f"- API Key: `{cloudinary.config().api_key}`")
+    st.write(f"- API Secret: `{'*' * len(cloudinary.config().api_secret) if cloudinary.config().api_secret else '未设置'}`")
+    st.write(f"- 根文件夹: `{CLOUDINARY_ROOT_FOLDER}`")
+    
+    # 诊断选项
+    if st.button("运行完整诊断"):
+        with st.spinner("诊断中..."):
+            # 测试连接
+            try:
+                result = cloudinary.api.ping()
+                st.success("✅ Cloudinary API连接成功")
+            except Exception as e:
+                st.error(f"❌ API连接失败: {str(e)}")
+                return
+            
+            # 列出根文件夹
+            st.subheader("📁 文件夹结构")
+            try:
+                folders = cloudinary.api.root_folders()
+                if folders.get('folders'):
+                    st.info("可用的根文件夹:")
+                    for folder in folders['folders']:
+                        folder_name = folder['name']
+                        # 高亮显示我们正在寻找的文件夹
+                        if folder_name == CLOUDINARY_ROOT_FOLDER:
+                            st.success(f"✅ **{folder_name}** - 找到目标文件夹!")
+                        else:
+                            st.write(f"- {folder_name}")
+                else:
+                    st.warning("⚠️ 没有找到任何根文件夹")
+            except Exception as e:
+                st.error(f"❌ 获取文件夹列表失败: {str(e)}")
+            
+            # 检查目标文件夹
+            st.subheader(f"🔍 检查目标文件夹: {CLOUDINARY_ROOT_FOLDER}")
+            try:
+                # 首先尝试获取文件夹信息
+                try:
+                    subfolders = cloudinary.api.subfolders(CLOUDINARY_ROOT_FOLDER)
+                    if subfolders.get('folders'):
+                        st.success(f"✅ 在 '{CLOUDINARY_ROOT_FOLDER}' 下找到 {len(subfolders['folders'])} 个子文件夹:")
+                        for folder in subfolders['folders']:
+                            st.write(f"  └─ {folder['path']}")
+                    else:
+                        st.warning(f"⚠️ 文件夹 '{CLOUDINARY_ROOT_FOLDER}' 下没有子文件夹")
+                except Exception as e:
+                    st.warning(f"⚠️ 无法获取子文件夹信息: {str(e)}")
+                
+                # 检查资源
+                resources = cloudinary.api.resources(
+                    type="upload",
+                    prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
+                    max_results=50,
+                    resource_type="image"
+                )
+                
+                total_count = resources.get('total_count', 0)
+                st.info(f"📊 资源统计: 总共 {total_count} 个资源")
+                
+                if resources.get('resources'):
+                    st.success("✅ 成功找到资源!")
+                    st.write("前10个资源示例:")
+                    
+                    for i, res in enumerate(resources['resources'][:10]):
+                        with st.expander(f"资源 {i+1}: {res['public_id']}"):
+                            col1, col2 = st.columns([1, 2])
+                            with col1:
+                                # 生成缩略图URL
+                                thumb_url, _ = cloudinary_url(
+                                    res['public_id'],
+                                    width=200,
+                                    height=200,
+                                    crop="fill",
+                                    quality="auto:low"
+                                )
+                                st.image(thumb_url)
+                            with col2:
+                                st.write(f"**Public ID:** `{res['public_id']}`")
+                                st.write(f"**格式:** {res.get('format', 'unknown')}")
+                                st.write(f"**大小:** {res.get('bytes', 0) / 1024:.1f} KB")
+                                st.write(f"**创建时间:** {res.get('created_at', 'unknown')}")
+                                
+                                # 显示自定义元数据
+                                context = res.get('context', {}).get('custom', {})
+                                if context:
+                                    st.write("**自定义元数据:**")
+                                    for key, value in context.items():
+                                        st.write(f"  - {key}: {value}")
+                else:
+                    st.error(f"❌ 在 '{CLOUDINARY_ROOT_FOLDER}/' 下没有找到任何图片资源")
+                    
+            except Exception as e:
+                st.error(f"❌ 检查文件夹资源失败: {str(e)}")
+    
+    # 测试单个资源
+    st.subheader("测试单个资源")
+    test_public_id = st.text_input("输入Public ID进行测试", 
+                                   value=f"{CLOUDINARY_ROOT_FOLDER}/dalle3/example_001_1")
+    
+    if st.button("测试单个资源"):
+        if test_public_id:
+            try:
+                # 检查资源是否存在
+                resource = cloudinary.api.resource(test_public_id, resource_type="image")
+                st.success(f"✅ 资源存在: {test_public_id}")
+                
+                # 显示资源信息
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    img_url, _ = cloudinary_url(
+                        test_public_id,
+                        width=400,
+                        height=400,
+                        crop="limit",
+                        quality="auto:good"
+                    )
+                    st.image(img_url)
+                
+                with col2:
+                    st.write(f"**格式:** {resource.get('format', 'unknown')}")
+                    st.write(f"**尺寸:** {resource.get('width', 0)}x{resource.get('height', 0)}")
+                    st.write(f"**大小:** {resource.get('bytes', 0) / 1024:.1f} KB")
+                    
+                    # 解析路径
+                    path_parts = test_public_id.split("/")
+                    if len(path_parts) >= 3:
+                        st.write(f"**解析结果:**")
+                        st.write(f"  - 模型ID: {path_parts[1]}")
+                        st.write(f"  - 文件名: {path_parts[2]}")
+                        
+                        # 尝试解析文件名
+                        filename_parts = path_parts[2].split("_")
+                        if len(filename_parts) >= 3:
+                            prompt_id = "_".join(filename_parts[:-2])
+                            image_number = filename_parts[-1]
+                            st.write(f"  - Prompt ID: {prompt_id}")
+                            st.write(f"  - 图片编号: {image_number}")
+                    else:
+                        st.warning("⚠️ 路径格式不符合预期: `根文件夹/模型ID/文件名`")
+                        
+            except NotFound:
+                st.error(f"❌ 资源不存在: {test_public_id}")
+            except Exception as e:
+                st.error(f"❌ 测试失败: {str(e)}")
+
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 
 
 

@@ -857,7 +857,7 @@ def test_specific_file():
     # 手动输入文件路径进行测试
     test_path = st.text_input(
         "输入完整的Cloudinary Public ID",
-        value=f"{CLOUDINARY_ROOT_FOLDER}/dalle3/char_fant_01_dalle3_1",
+        value=f"{CLOUDINARY_ROOT_FOLDER}/dalle3/conc_anim_07_dalle3_1_pqaazq",
         key="test_path"
     )
     
@@ -1030,6 +1030,7 @@ def quick_diagnostic():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 
 
 

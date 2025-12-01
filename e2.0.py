@@ -543,20 +543,92 @@ def main_rating_page():
         
         if st.button("测试子文件夹内容"):
             try:
-                resources = cloudinary.api.resources(
+                st.info(f"🔍 测试Cloudinary API调用...")
+                
+                # 测试1: 检查文件夹是否存在
+                try:
+                    folders = cloudinary.api.subfolders(f"{CLOUDINARY_ROOT_FOLDER}")
+                    st.write("📂 文件夹列表:")
+                    if folders.get('folders'):
+                        for folder in folders['folders']:
+                            st.write(f"- {folder['path']}")
+                    else:
+                        st.warning("⚠️ 没有找到任何子文件夹")
+                except Exception as e:
+                    st.warning(f"获取子文件夹列表失败: {str(e)}")
+                
+                st.markdown("---")
+                
+                # 测试2: 尝试不同参数组合
+                st.write("🔄 尝试不同参数组合:")
+                
+                # 组合1: 使用prefix参数
+                st.write("**组合1 - 使用prefix参数:**")
+                resources1 = cloudinary.api.resources(
                     type="upload",
                     prefix=f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}/",
                     max_results=10
                 )
+                st.write(f"返回资源数量: {len(resources1.get('resources', []))}")
                 
-                if resources.get('resources'):
-                    st.success(f"✅ 在 `{test_subfolder}` 中找到 {len(resources['resources'])} 个资源")
+                # 组合2: 指定resource_type
+                st.write("**组合2 - 指定resource_type='image':**")
+                resources2 = cloudinary.api.resources(
+                    type="upload",
+                    prefix=f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}/",
+                    max_results=10,
+                    resource_type="image"
+                )
+                st.write(f"返回资源数量: {len(resources2.get('resources', []))}")
+                
+                # 组合3: 使用folders参数
+                st.write("**组合3 - 使用folders参数:**")
+                try:
+                    resources3 = cloudinary.api.resources(
+                        type="upload",
+                        folders=f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}",
+                        max_results=10
+                    )
+                    st.write(f"返回资源数量: {len(resources3.get('resources', []))}")
+                except Exception as e:
+                    st.write(f"folders参数失败: {str(e)}")
+                
+                # 组合4: 不使用任何过滤，获取所有资源
+                st.write("**组合4 - 获取所有资源(无过滤):**")
+                all_resources = cloudinary.api.resources(
+                    type="upload",
+                    max_results=100
+                )
+                
+                total_all = all_resources.get('total_count', 0)
+                st.write(f"Cloudinary账户中共有 {total_all} 个上传资源")
+                
+                # 查找包含目标文件夹的资源
+                if total_all > 0:
+                    found_in_all = []
+                    for res in all_resources.get('resources', [])[:50]:  # 检查前50个
+                        if f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}" in res.get('public_id', ''):
+                            found_in_all.append(res['public_id'])
                     
-                    for i, res in enumerate(resources['resources'][:5]):
-                        st.write(f"{i+1}. `{res['public_id']}` ({res.get('format', 'unknown')})")
+                    if found_in_all:
+                        st.success(f"✅ 在全部资源中找到 {len(found_in_all)} 个匹配项:")
+                        for item in found_in_all[:5]:
+                            st.write(f"- {item}")
+                    else:
+                        st.warning("⚠️ 在全部资源中未找到目标文件夹的内容")
+                
+                # 检查具体的错误信息
+                st.markdown("---")
+                st.write("📊 API响应详情:")
+                
+                # 输出resources1的完整响应
+                if resources1.get('resources'):
+                    st.success("✅ 组合1找到了资源！")
+                    for i, res in enumerate(resources1['resources'][:5]):
+                        st.write(f"{i+1}. `{res['public_id']}`")
                         
-                        # 如果是图片，显示缩略图
-                        if res.get('format', '').lower() in ['png', 'jpg', 'jpeg']:
+                        # 显示图片预览
+                        if res.get('format') in ['png', 'jpg', 'jpeg', 'webp']:
                             thumb_url, _ = cloudinary_url(
                                 res['public_id'],
                                 width=100,
@@ -566,10 +638,24 @@ def main_rating_page():
                             )
                             st.image(thumb_url, width=100)
                 else:
-                    st.error(f"❌ 子文件夹 `{test_subfolder}` 中没有资源")
+                    st.error("❌ 所有API调用都未返回资源")
+                    st.write("尝试使用更低级别的API...")
                     
+                    # 尝试直接调用resource方法测试一个已知文件
+                    test_filename = f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}/char_fant_01_{test_subfolder}_1"
+                    st.write(f"尝试直接获取文件: `{test_filename}`")
+                    try:
+                        test_resource = cloudinary.api.resource(test_filename)
+                        st.success(f"✅ 成功获取文件: {test_resource['public_id']}")
+                    except NotFound:
+                        st.error("❌ 文件不存在，可能文件名不正确")
+                    except Exception as e:
+                        st.error(f"❌ 获取失败: {str(e)}")
+                        
             except Exception as e:
                 st.error(f"测试失败: {str(e)}")
+                import traceback
+                st.error(f"详细错误信息: {traceback.format_exc()}")
 
     # 如果切换到统计页面，直接跳转
     if page_nav == "📊 统计分析":
@@ -764,6 +850,94 @@ def main_rating_page():
                     # 刷新页面以显示最新评分
                     st.rerun()
 
+# 添加一个直接测试具体文件的功能
+def test_specific_file():
+    st.subheader("📁 直接路径测试")
+    
+    # 手动输入文件路径进行测试
+    test_path = st.text_input(
+        "输入完整的Cloudinary Public ID",
+        value=f"{CLOUDINARY_ROOT_FOLDER}/dalle3/char_fant_01_dalle3_1",
+        key="test_path"
+    )
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("测试文件是否存在"):
+            try:
+                resource = cloudinary.api.resource(test_path)
+                st.success(f"✅ 文件存在: {resource['public_id']}")
+                st.write(f"**格式:** {resource.get('format', 'unknown')}")
+                st.write(f"**尺寸:** {resource.get('width', 0)}x{resource.get('height', 0)}")
+                st.write(f"**创建时间:** {resource.get('created_at', 'unknown')}")
+                
+                # 显示图片
+                img_url, _ = cloudinary_url(
+                    test_path,
+                    width=400,
+                    height=400,
+                    crop="limit",
+                    quality="auto:good"
+                )
+                st.image(img_url)
+                
+            except NotFound:
+                st.error(f"❌ 文件不存在: {test_path}")
+                
+                # 尝试查找类似文件
+                st.write("尝试查找类似文件...")
+                try:
+                    all_resources = cloudinary.api.resources(
+                        type="upload",
+                        prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
+                        max_results=50
+                    )
+                    
+                    found_similar = []
+                    for res in all_resources.get('resources', []):
+                        if test_subfolder in res['public_id']:
+                            found_similar.append(res['public_id'])
+                    
+                    if found_similar:
+                        st.info(f"找到 {len(found_similar)} 个类似文件:")
+                        for file in found_similar[:5]:
+                            st.write(f"- {file}")
+                    else:
+                        st.warning("没有找到任何类似文件")
+                        
+                except Exception as e:
+                    st.error(f"查找失败: {str(e)}")
+                    
+            except Exception as e:
+                st.error(f"测试失败: {str(e)}")
+    
+    with col2:
+        if st.button("列出文件夹内容"):
+            # 提取文件夹路径
+            if "/" in test_path:
+                folder_path = "/".join(test_path.split("/")[:-1])
+                st.write(f"文件夹路径: `{folder_path}`")
+                
+                try:
+                    # 列出文件夹内容
+                    folder_resources = cloudinary.api.resources(
+                        type="upload",
+                        prefix=folder_path + "/",
+                        max_results=20
+                    )
+                    
+                    if folder_resources.get('resources'):
+                        st.success(f"✅ 找到 {len(folder_resources['resources'])} 个文件:")
+                        for res in folder_resources['resources']:
+                            format_icon = "🖼️" if res.get('format') in ['png', 'jpg', 'jpeg'] else "📄"
+                            st.write(f"{format_icon} {res['public_id']}")
+                    else:
+                        st.error("❌ 文件夹为空")
+                        
+                except Exception as e:
+                    st.error(f"列出失败: {str(e)}")
+
 def quick_diagnostic():
     """快速诊断函数"""
     st.title("🚨 快速诊断")
@@ -856,6 +1030,7 @@ def quick_diagnostic():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 
 
 

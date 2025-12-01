@@ -803,9 +803,46 @@ def show_diagnostics():
             except Exception as e:
                 st.error(f"❌ 测试失败: {str(e)}")
 
+# 在 if __name__ == "__main__": 之前添加
+def quick_diagnostic():
+    """快速诊断函数"""
+    st.title("🚨 快速诊断")
+    
+    st.info("正在测试Cloudinary连接...")
+    try:
+        result = cloudinary.api.ping()
+        st.success("✅ Cloudinary API连接成功")
+    except Exception as e:
+        st.error(f"❌ API连接失败: {str(e)}")
+        return
+    
+    # 检查目标文件夹
+    st.info(f"检查文件夹: {CLOUDINARY_ROOT_FOLDER}")
+    try:
+        resources = cloudinary.api.resources(
+            type="upload",
+            prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
+            max_results=10
+        )
+        
+        if resources.get('resources'):
+            st.success(f"✅ 找到 {resources.get('total_count', 0)} 个资源")
+            for res in resources['resources']:
+                st.write(f"- `{res['public_id']}`")
+        else:
+            st.error(f"❌ 没有找到资源")
+    except Exception as e:
+        st.error(f"检查失败: {str(e)}")
+
+# 临时：在侧边栏添加诊断按钮
+with st.sidebar:
+    if st.button("🚨 运行诊断"):
+        quick_diagnostic()
+
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 
 
 

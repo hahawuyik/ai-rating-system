@@ -143,17 +143,19 @@ def is_image_file(public_id: str, format: str) -> bool:
     return format.lower() in image_formats
 
 # ===== 从Cloudinary API拉取图片资源并初始化数据库 =====
+# 修改 load_images_from_cloudinary_to_db 函数
 def load_images_from_cloudinary_to_db(force_refresh=False):
     """
-    从Cloudinary拉取资源并初始化数据库，支持强制刷新、调试日志
+    从Cloudinary拉取资源并初始化数据库
     """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     loaded_count = 0
+    total_expected = 4000  # 期望的图片总数
+    
     st.info(f"🔍 从Cloudinary拉取资源：{CLOUDINARY_ROOT_FOLDER}/*")
 
-    # 强制刷新：清空现有images表，重新拉取所有资源
     if force_refresh:
         st.warning("⚠️ 强制刷新模式：清空现有图片记录")
         cursor.execute("DELETE FROM images")
@@ -162,8 +164,8 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
     try:
         cloudinary.api.ping()
         st.success(f"✅ Cloudinary API连通正常！")
-        
-        # 首先获取所有子文件夹
+
+        # 获取所有子文件夹
         st.info("📂 获取子文件夹列表...")
         subfolders_result = cloudinary.api.subfolders(CLOUDINARY_ROOT_FOLDER)
         subfolders = subfolders_result.get('folders', [])
@@ -174,14 +176,15 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
             
         st.success(f"✅ 找到 {len(subfolders)} 个子文件夹")
         
-        loaded_count = 0
+        # 进度条
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        # 遍历每个子文件夹
-        for folder in subfolders:
-            folder_path = folder['path']  # 例如: "ai-rating-images/dalle3"
+        for folder_idx, folder in enumerate(subfolders):
+            folder_path = folder['path']
             model_id = folder_path.split('/')[-1]
             
-            st.info(f"📁 处理文件夹: {folder_path} (模型: {model_id})")
+            status_text.text(f"📁 处理文件夹: {folder_path} ({folder_idx+1}/{len(subfolders)})")
             
             # 分页获取该文件夹下的所有资源
             next_cursor = None
@@ -189,7 +192,6 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
             
             while True:
                 try:
-                    # 使用folders参数获取资源
                     resources = cloudinary.api.resources(
                         type="upload",
                         folders=folder_path,
@@ -202,33 +204,51 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                     batch_resources = resources.get("resources", [])
                     
                     if not batch_resources:
+                        st.warning(f"⚠️ 文件夹 {folder_path} 中没有图片资源")
                         break
                         
                     for res in batch_resources:
-                        # 注意：使用folders参数时，public_id不包含完整路径
-                        # 需要手动构建完整的public_id
-                        filename = res["public_id"]
+                        filename = res["public_id"]  # 注意：这里只返回文件名，不包含路径
+                        
+                        # 🔥 关键：使用完整的public_id作为filepath
                         full_public_id = f"{folder_path}/{filename}"
                         
-                        # 解析文件名
+                        # 解析文件名：格式为 char_fant_01_dalle3_1_xxxx
                         parts = filename.split('_')
                         
-                        # 根据您的文件名格式: char_fant_01_dalle3_1_xxxx
-                        if len(parts) >= 4:
-                            # 假设格式为: [类型]_[风格]_[编号]_[模型]_[图片编号]_[随机字符]
-                            prompt_id = '_'.join(parts[:-3])  # char_fant_01
-                            
-                            try:
-                                # 尝试获取图片编号（倒数第二部分）
-                                image_number = int(parts[-2])
-                            except:
-                                image_number = 1
+                        # 确定prompt_id和image_number
+                        if len(parts) >= 5:
+                            # 找到模型名在文件名中的位置
+                            for i, part in enumerate(parts):
+                                if part in [model_id, model_id.replace('_', '')]:
+                                    # 模型名之前的部分作为prompt_id
+                                    prompt_id = '_'.join(parts[:i])
+                                    # 模型名之后的数字作为image_number
+                                    if i+1 < len(parts) and parts[i+1].isdigit():
+                                        image_number = int(parts[i+1])
+                                    else:
+                                        image_number = 1
+                                    break
+                            else:
+                                # 如果没找到模型名，使用简化逻辑
+                                prompt_id = '_'.join(parts[:-2]) if len(parts) >= 3 else filename
+                                image_number = int(parts[-2]) if len(parts)>=2 and parts[-2].isdigit() else 1
                         else:
-                            prompt_id = filename
-                            image_number = 1
+                            prompt_id = '_'.join(parts[:-1]) if len(parts) > 1 else filename
+                            image_number = int(parts[-1]) if parts[-1].isdigit() else 1
                         
-                        # 读取元数据
+                        # 读取自定义元数据
                         context = res.get("context", {}).get("custom", {})
+                        
+                        # 尝试从同名的JSON文件读取更多元数据
+                        json_public_id = full_public_id + ".info.json"
+                        try:
+                            json_resource = cloudinary.api.resource(json_public_id, resource_type="raw")
+                            if json_resource.get("context", {}).get("custom"):
+                                context.update(json_resource["context"]["custom"])
+                        except:
+                            pass
+                        
                         metadata = {
                             "prompt": context.get("prompt", f"Prompt: {prompt_id}"),
                             "type": context.get("type", "unknown"),
@@ -238,7 +258,7 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                             "generation_time": res.get("created_at", datetime.now().isoformat())
                         }
                         
-                        # 插入数据库
+                        # 插入或更新数据库记录
                         cursor.execute('''
                             INSERT OR REPLACE INTO images (
                                 prompt_id, model_id, image_number, filepath,
@@ -248,7 +268,7 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                             prompt_id,
                             model_id,
                             image_number,
-                            full_public_id,
+                            full_public_id,  # 🔥 使用完整的public_id
                             metadata["prompt"],
                             metadata["type"],
                             metadata["style"],
@@ -260,40 +280,122 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                         loaded_count += 1
                         folder_loaded += 1
                         
-                        if loaded_count % 50 == 0:
+                        if loaded_count % 100 == 0:
                             conn.commit()
-                            st.success(f"✅ 已加载 {loaded_count} 张图片到数据库...")
-                            
+                            status_text.text(f"✅ 已加载 {loaded_count} 张图片...")
+                    
+                    # 更新进度条
+                    progress_bar.progress(min((folder_idx + 1) / len(subfolders), 1.0))
+                    
                     if not next_cursor:
                         break
                         
                 except Exception as e:
                     st.error(f"❌ 处理文件夹 {folder_path} 时出错: {str(e)}")
                     break
-                    
+            
             st.info(f"📊 从 {folder_path} 加载了 {folder_loaded} 张图片")
         
         conn.commit()
-        st.success(f"🎉 总共从Cloudinary加载了 {loaded_count} 张图片到数据库！")
+        
+        # 统计实际加载的图片数量
+        cursor.execute("SELECT COUNT(*) FROM images")
+        total_loaded = cursor.fetchone()[0]
+        
+        if total_loaded > 0:
+            st.success(f"🎉 成功从Cloudinary加载 {total_loaded} 张图片到数据库！")
+            
+            # 显示各模型数量统计
+            cursor.execute("SELECT model_id, COUNT(*) as count FROM images GROUP BY model_id")
+            model_stats = cursor.fetchall()
+            
+            st.subheader("📊 各模型图片数量统计")
+            for model_id, count in model_stats:
+                st.write(f"- **{model_id}**: {count} 张图片")
+            
+            # 显示总体统计
+            st.subheader("📈 总体统计")
+            st.write(f"**期望总数**: {total_expected} 张")
+            st.write(f"**实际加载**: {total_loaded} 张")
+            st.write(f"**完成率**: {(total_loaded / total_expected * 100):.1f}%")
+            
+            if total_loaded < total_expected:
+                st.warning(f"⚠️ 只加载了 {total_loaded}/{total_expected} 张图片，可能还有图片未被加载")
+        else:
+            st.error("❌ 没有加载任何图片到数据库")
         
     except Exception as e:
         st.error(f"❌ 拉取Cloudinary资源失败: {str(e)}")
         import traceback
         st.error(f"🔍 错误栈详情: {traceback.format_exc()}")
+        conn.close()
         return 0
     
     conn.close()
     return loaded_count
 
 # ===== 生成Cloudinary图片可访问URL =====
-def get_cloud_image_url(public_id: str) -> str:
+def get_cloud_image_url(filepath: str, model_id: str) -> str:
     """
-    根据Cloudinary public_id生成优化后的图片URL
-    增加资源存在性校验，避免404
+    根据filepath和model_id生成正确的Cloudinary URL
     """
     try:
+        # 🔥 关键修改：修正public_id的构建方式
+        # 如果filepath已经是完整路径，直接使用；否则构建完整路径
+        if filepath.startswith("ai-rating-images/"):
+            public_id = filepath
+        else:
+            # 从filepath中提取基本文件名
+            # filepath可能是：conc_pike_07_sd4
+            # 需要构建为：ai-rating-images/dalle3/conc_pike_07_sd4_turbo_3_5cgkm
+            # 但是我们不知道随机字符部分
+            
+            # 尝试从Cloudinary搜索这个文件
+            # 首先，获取该文件夹下的所有文件
+            search_prefix = f"ai-rating-images/{model_id}/"
+            
+            try:
+                # 搜索包含基本文件名的资源
+                resources = cloudinary.api.resources(
+                    type="upload",
+                    prefix=search_prefix,
+                    max_results=100
+                )
+                
+                # 查找匹配的文件
+                for res in resources.get('resources', []):
+                    res_name = res['public_id'].split('/')[-1]
+                    # 检查是否包含基本文件名
+                    if filepath in res_name:
+                        public_id = res['public_id']
+                        break
+                else:
+                    # 如果没找到，使用原始filepath尝试
+                    public_id = f"ai-rating-images/{model_id}/{filepath}"
+                    
+            except Exception:
+                public_id = f"ai-rating-images/{model_id}/{filepath}"
+        
         # 先校验资源是否存在
-        cloudinary.api.resource(public_id, resource_type="image")
+        try:
+            cloudinary.api.resource(public_id, resource_type="image")
+        except NotFound:
+            st.warning(f"⚠️ 尝试的Public ID不存在: {public_id}")
+            # 尝试其他可能的格式
+            # 可能是filepath缺少随机字符部分
+            # 尝试搜索最接近的文件
+            resources = cloudinary.api.resources(
+                type="upload",
+                prefix=f"ai-rating-images/{model_id}/",
+                max_results=10
+            )
+            
+            if resources.get('resources'):
+                # 使用第一个找到的文件作为测试
+                public_id = resources['resources'][0]['public_id']
+                st.info(f"🔍 使用替代文件: {public_id}")
+            else:
+                return "https://via.placeholder.com/800x800?text=Image+Not+Found"
         
         # 生成优化后的URL：限制尺寸、自动质量压缩
         url, _ = cloudinary_url(
@@ -303,13 +405,11 @@ def get_cloud_image_url(public_id: str) -> str:
             height=800,
             crop="limit",
             quality="auto:good",
-            format="png",
+            format="auto",  # 自动检测格式，因为文件没有扩展名
             secure=True
         )
         return url
-    except NotFound:
-        st.error(f"❌ 图片资源不存在: {public_id}")
-        return "https://via.placeholder.com/800x800?text=Image+Not+Found"
+        
     except Exception as e:
         st.error(f"❌ 加载图片失败: {str(e)}")
         return "https://via.placeholder.com/800x800?text=Error+Loading+Image"
@@ -709,8 +809,17 @@ def main_rating_page():
 
             # 左侧：图片展示
             with col_img:
-                img_url = get_cloud_image_url(row['filepath'])
+                # 使用修正后的函数
+                img_url = get_cloud_image_url(row['filepath'], row['model_id'])
+                
+                # 显示图片和调试信息
                 st.image(img_url, use_container_width=True)
+                
+                # 添加调试信息
+                with st.expander("🔍 调试信息", expanded=False):
+                    st.write(f"**数据库中的filepath:** `{row['filepath']}`")
+                    st.write(f"**模型ID:** `{row['model_id']}`")
+                    st.write(f"**图片URL:** `{img_url}`")
                 
                 st.caption(f"**Prompt:** {row['prompt_text'][:100]}..." if len(row['prompt_text'])>100 else f"**Prompt:** {row['prompt_text']}")
                 st.caption(f"**类型:** {row['type']} | **风格:** {row['style']}")
@@ -988,6 +1097,7 @@ def quick_diagnostic():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 
 
 

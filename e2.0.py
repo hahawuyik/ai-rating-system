@@ -318,15 +318,25 @@ def main():
             conn = sqlite3.connect(DB_PATH)
             sql = '''
             SELECT 
-                e.id as ID, e.image_id as [关键_图片内部ID], 
+                e.id as 评分ID,
+                e.image_id as [关键_评分表里的图片ID],
+                i.id as [对照_图片表里的图片ID],
                 e.evaluator_id as 评分员,
-                i.id as [对照_实际图片ID], e.evaluator_id as 评分员, i.model_id as 模型,
-                i.filepath as 路径, i.prompt_text as Prompt,
-                e.prompt_adherence as Prompt匹配度, e.overall_quality as 整体评分,
-                e.clarity as 清晰度, e.detail_richness as 细节, e.color_harmony as 色彩,
-                e.perspective_check as 透视, e.asset_cleanliness as 资产干净度,
-                e.style_consistency as 风格一致性, e.structural_logic as 结构,
-                e.is_usable as 是否可用, e.notes as 备注, e.evaluation_time as 时间
+                i.model_id as 模型,
+                i.filepath as 路径,
+                i.prompt_text as Prompt,
+                e.prompt_adherence as Prompt匹配度,
+                e.overall_quality as 整体评分,
+                e.clarity as 清晰度,
+                e.detail_richness as 细节,
+                e.color_harmony as 色彩,
+                e.perspective_check as 透视,
+                e.asset_cleanliness as 资产干净度,
+                e.style_consistency as 风格一致性,
+                e.structural_logic as 结构,
+                e.is_usable as 是否可用,
+                e.notes as 备注,
+                e.evaluation_time as 时间
             FROM evaluations e
             LEFT JOIN images i ON e.image_id = i.id
             ORDER BY e.evaluation_time DESC
@@ -428,4 +438,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

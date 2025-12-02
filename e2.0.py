@@ -267,9 +267,6 @@ def get_existing_score(image_id, user_id):
 
 # ===== 主程序 =====
 def main():
-    import os
-    st.error(f"当前数据库的真实路径是：{os.path.abspath(DB_PATH)}")
-    # 这里的逻辑已经包含了自动加载Prompt
     load_images_from_cloudinary_to_db(force_refresh=False)
     
     current_user = get_user_id()
@@ -292,56 +289,122 @@ def main():
             # st.file_uploader... 
 
         st.divider()
-        st.subheader("🛠️ Prompt 修复工具")
-        st.caption("如果自动加载失败，请手动上传 JSON 文件：")
+        st.subheader("📊 数据导出中心")
+        st.caption("点击下方按钮下载云端保存的评分数据")
+
+        # 添加一个刷新按钮，确保读取最新数据
+        if st.button("🔄 刷新并准备下载"):
+            # 连接数据库
+            conn = sqlite3.connect(DB_PATH)
+            
+            # 编写 SQL 查询：把评分表和图片信息表连起来查
+            # 这样导出的表格里既有分数，也有图片文件名和模型
+            sql = '''
+            SELECT 
+                e.id as ID,
+                e.evaluator_id as 评分员,
+                i.model_id as 模型类型,
+                i.filepath as 图片路径,
+                i.prompt_text as Prompt提示词,
+                e.prompt_adherence as Prompt匹配度,
+                e.overall_quality as 整体评分,
+                e.clarity as 清晰度,
+                e.detail_richness as 细节,
+                e.color_harmony as 色彩,
+                e.perspective_check as 透视,
+                e.asset_cleanliness as 资产干净度,
+                e.style_consistency as 风格一致性,
+                e.structural_logic as 结构,
+                e.is_usable as 是否可用,
+                e.notes as 备注,
+                e.evaluation_time as 提交时间
+            FROM evaluations e
+            LEFT JOIN images i ON e.image_id = i.id
+            ORDER BY e.evaluation_time DESC
+            '''
+            
+            try:
+                # 使用 pandas 读取数据
+                df_export = pd.read_sql(sql, conn)
+                conn.close()
+
+                if not df_export.empty:
+                    st.success(f"✅ 成功读取 {len(df_export)} 条记录")
+                    
+                    # 1. 简单预览前3条
+                    with st.expander("👀 预览数据 (前3条)"):
+                        st.dataframe(df_export.head(3))
+
+                    # 2. 生成 CSV 文件
+                    # ⚠️ 关键：使用 utf-8-sig 编码，否则 Excel 打开中文会乱码
+                    csv_data = df_export.to_csv(index=False).encode('utf-8-sig')
+                    
+                    # 3. 显示下载按钮
+                    st.download_button(
+                        label="📥 点击下载 CSV 表格 (Excel可直接打开)",
+                        data=csv_data,
+                        file_name=f"Rating_Data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        type="primary" # 让按钮显眼一点
+                    )
+                else:
+                    st.warning("📭 数据库里暂时还没有评分数据。")
+                    
+            except Exception as e:
+                st.error(f"读取数据失败: {e}")
+
+        # st.divider()
+        # st.subheader("🛠️ Prompt 修复工具")
+        # st.caption("如果自动加载失败，请手动上传 JSON 文件：")
         
-        # 📂 手动上传入口
-        uploaded_prompt_file = st.file_uploader("上传 final_prompts_translated.json", type="json")
+        # # 📂 手动上传入口
+        # uploaded_prompt_file = st.file_uploader("上传 final_prompts_translated.json", type="json")
         
-        if uploaded_prompt_file is not None:
-            if st.button("▶️ 开始匹配并导入 Prompt"):
-                try:
-                    # 读取上传的 JSON
-                    data = json.load(uploaded_prompt_file)
-                    st.info(f"文件包含 {len(data)} 条数据，开始匹配数据库...")
+        # if uploaded_prompt_file is not None:
+        #     if st.button("▶️ 开始匹配并导入 Prompt"):
+        #         try:
+        #             # 读取上传的 JSON
+        #             data = json.load(uploaded_prompt_file)
+        #             st.info(f"文件包含 {len(data)} 条数据，开始匹配数据库...")
                     
-                    conn = sqlite3.connect(DB_PATH)
-                    cursor = conn.cursor()
+        #             conn = sqlite3.connect(DB_PATH)
+        #             cursor = conn.cursor()
                     
-                    # 开启事务加速
-                    cursor.execute("BEGIN TRANSACTION")
-                    updated_count = 0
+        #             # 开启事务加速
+        #             cursor.execute("BEGIN TRANSACTION")
+        #             updated_count = 0
                     
-                    # 进度条
-                    prog = st.progress(0)
+        #             # 进度条
+        #             prog = st.progress(0)
                     
-                    for i, (key, value) in enumerate(data.items()):
-                        # 确保 value 是字符串
-                        p_text = value if isinstance(value, str) else str(value)
+        #             for i, (key, value) in enumerate(data.items()):
+        #                 # 确保 value 是字符串
+        #                 p_text = value if isinstance(value, str) else str(value)
                         
-                        # 核心匹配逻辑：文件名包含 Key 就算匹配
-                        # 例如 Key="char_anim_01", Filepath=".../char_anim_01_dalle3..." -> 匹配成功
-                        cursor.execute("UPDATE images SET prompt_text = ? WHERE filepath LIKE ?", 
-                                       (p_text, f"%{key}%"))
-                        updated_count += cursor.rowcount
+        #                 # 核心匹配逻辑：文件名包含 Key 就算匹配
+        #                 # 例如 Key="char_anim_01", Filepath=".../char_anim_01_dalle3..." -> 匹配成功
+        #                 cursor.execute("UPDATE images SET prompt_text = ? WHERE filepath LIKE ?", 
+        #                                (p_text, f"%{key}%"))
+        #                 updated_count += cursor.rowcount
                         
-                        if i % 100 == 0:
-                            prog.progress(min((i+1)/len(data), 1.0))
+        #                 if i % 100 == 0:
+        #                     prog.progress(min((i+1)/len(data), 1.0))
                             
-                    cursor.execute("COMMIT")
-                    conn.close()
+        #             cursor.execute("COMMIT")
+        #             conn.close()
                     
-                    if updated_count > 0:
-                        st.success(f"🎉 成功！更新了 {updated_count} 张图片的 Prompt！")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("❌ 匹配失败：更新了 0 条数据。")
-                        st.warning("可能原因：JSON里的 Key 和数据库里的文件名对应不上。")
-                        st.write("JSON Key 示例:", list(data.keys())[:3])
+        #             if updated_count > 0:
+        #                 st.success(f"🎉 成功！更新了 {updated_count} 张图片的 Prompt！")
+        #                 time.sleep(1)
+        #                 st.rerun()
+        #             else:
+        #                 st.error("❌ 匹配失败：更新了 0 条数据。")
+        #                 st.warning("可能原因：JSON里的 Key 和数据库里的文件名对应不上。")
+        #                 st.write("JSON Key 示例:", list(data.keys())[:3])
                         
-                except Exception as e:
-                    st.error(f"导入出错: {e}")
+        #         except Exception as e:
+        #             st.error(f"导入出错: {e}")
+    
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -429,6 +492,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

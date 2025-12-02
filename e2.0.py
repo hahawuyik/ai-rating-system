@@ -292,14 +292,14 @@ def main():
             
             c1, c2 = st.columns(2)
             with c1:
-                perspective = st.slider("透视准确性（是否扭曲） (Perspective)", 1, 5, existing.get('perspective_check', 3), 
+                perspective = st.slider("透视准确性 (是否扭曲)", 1, 5, existing.get('perspective_check', 3), 
                                       help="透视是否扭曲？是否符合特定的游戏视角（如ISO/顶视图）？")
-                asset_clean = st.slider("资产干净度（边缘是否清晰） (Cleanliness)", 1, 5, existing.get('asset_cleanliness', 3), 
+                asset_clean = st.slider("资产干净度 (边缘清晰)", 1, 5, existing.get('asset_cleanliness', 3), 
                                       help="边缘是否清晰？背景是否容易去除（Matting）？有无伪影？")
             with c2:
-                struct_logic = st.slider("结构合理性 (Structure)", 1, 5, existing.get('structural_logic', 3), 
+                struct_logic = st.slider("结构合理性", 1, 5, existing.get('structural_logic', 3), 
                                        help="物体结构是否合理？例如人体关节、建筑支撑结构是否符合逻辑？")
-                style_const = st.slider("风格一致性 (Consistency)", 1, 5, existing.get('style_consistency', 3), 
+                style_const = st.slider("风格一致性", 1, 5, existing.get('style_consistency', 3), 
                                       help="是否具有明显的风格特征？能否直接放入统一风格的游戏包中？")
 
             st.markdown("---")

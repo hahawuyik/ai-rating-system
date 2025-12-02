@@ -267,6 +267,8 @@ def get_existing_score(image_id, user_id):
 
 # ===== 主程序 =====
 def main():
+    import os
+    st.error(f"当前数据库的真实路径是：{os.path.abspath(DB_PATH)}")
     # 这里的逻辑已经包含了自动加载Prompt
     load_images_from_cloudinary_to_db(force_refresh=False)
     
@@ -427,6 +429,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

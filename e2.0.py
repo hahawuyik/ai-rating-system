@@ -27,15 +27,20 @@ cloudinary.config(
 )
 CLOUDINARY_ROOT_FOLDER = "ai-rating-images"
 
-# ===== 路径配置 =====
+# ===== 路径配置 (修正版) =====
+# 检查是否在 Streamlit Cloud 云端运行
 if 'STREAMLIT_SHARING' in os.environ or 'STREAMLIT_SERVER' in os.environ:
-    DATASET_ROOT = os.path.join(os.getcwd(), "ai_dataset_project")
+    # ☁️ 云端环境：直接存在当前目录下的 data 文件夹里
+    DATASET_ROOT = "data_folder"
 else:
+    # 💻 本地环境：存到你的 D 盘
     DATASET_ROOT = "D:/ai_dataset_project"
 
+# 自动创建路径
 OUTPUT_DIR = os.path.join(DATASET_ROOT, "images")
 METADATA_DIR = os.path.join(DATASET_ROOT, "metadata")
 DB_PATH = os.path.join(METADATA_DIR, "image_index.db")
+
 # 📍 指定本地 Prompt 文件路径
 LOCAL_PROMPT_JSON = os.path.join(METADATA_DIR, "final_prompts_translated.json")
 
@@ -509,6 +514,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

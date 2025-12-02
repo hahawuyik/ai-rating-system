@@ -289,6 +289,34 @@ def get_existing_score(image_id, user_id):
 
 # ===== 主程序 =====
 def main():
+        # ----------------- 🚨 调试代码开始 -----------------
+    st.markdown("### 🕵️‍♂️ 数据库侦探")
+    
+    # 1. 打印当前绝对路径
+    abs_db_path = os.path.abspath(DB_PATH)
+    st.error(f"📍 程序正在读取的数据库路径是：\n\n`{abs_db_path}`")
+    
+    # 2. 检查文件是否存在
+    if os.path.exists(abs_db_path):
+        st.warning("⚠️ 发现数据库文件存在！(这就是导致报错的旧文件)")
+        
+        # 3. 提供核按钮
+        if st.button("💣 点击这里：强制粉碎这个数据库文件！", type="primary"):
+            try:
+                # 强制断开所有连接
+                sqlite3.connect(abs_db_path).close()
+                # 删除文件
+                os.remove(abs_db_path)
+                st.success("✅ 删除成功！请立即刷新网页 (按 F5)")
+                time.sleep(2)
+                st.rerun()
+            except Exception as e:
+                st.error(f"删除失败，可能是文件被占用: {e}")
+    else:
+        st.success("✅ 这里的数据库文件已被删除。程序正在准备重新创建...")
+    
+    st.markdown("---")
+    # ----------------- 🚨 调试代码结束 -----------------
     load_images_from_cloudinary_to_db(force_refresh=False)
     
     current_user = get_user_id()
@@ -514,6 +542,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

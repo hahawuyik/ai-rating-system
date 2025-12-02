@@ -199,7 +199,7 @@ def get_cloud_image_url(filepath: str) -> str:
             width=800,
             crop="limit",
             quality="auto",
-            format="auto", # 自动适配格式
+            fetch_format="auto", # 自动适配格式
             secure=True
         )
         return url
@@ -296,3 +296,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

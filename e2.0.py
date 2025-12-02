@@ -267,36 +267,6 @@ def get_existing_score(image_id, user_id):
 
 # ===== 主程序 =====
 def main():
-     # ----------------- 🚨 调试代码开始 -----------------
-    st.markdown("### 🕵️‍♂️ 数据库侦探")
-    
-    # 1. 打印当前绝对路径
-    abs_db_path = os.path.abspath(DB_PATH)
-    st.error(f"📍 程序正在读取的数据库路径是：\n\n`{abs_db_path}`")
-    
-    # 2. 检查文件是否存在
-    if os.path.exists(abs_db_path):
-        st.warning("⚠️ 发现数据库文件存在！(这就是导致报错的旧文件)")
-        
-        # 3. 提供核按钮
-        if st.button("💣 点击这里：强制粉碎这个数据库文件！", type="primary"):
-            try:
-                # 强制断开所有连接
-                sqlite3.connect(abs_db_path).close()
-                # 删除文件
-                os.remove(abs_db_path)
-                st.success("✅ 删除成功！请立即刷新网页 (按 F5)")
-                time.sleep(2)
-                st.rerun()
-            except Exception as e:
-                st.error(f"删除失败，可能是文件被占用: {e}")
-    else:
-        st.success("✅ 这里的数据库文件已被删除。程序正在准备重新创建...")
-    
-    st.markdown("---")
-    # ----------------- 🚨 调试代码结束 -----------------
-    if not os.path.exists(DB_PATH): init_database()
-    
     # 这里的逻辑已经包含了自动加载Prompt
     load_images_from_cloudinary_to_db(force_refresh=False)
     
@@ -318,6 +288,58 @@ def main():
             if st.button("⚠️ 强制重置数据库结构"): init_database(); st.success("表结构已更新")
             # 这里我把手动上传的按钮注释掉了，因为已经自动化了，不需要了
             # st.file_uploader... 
+
+        st.divider()
+        st.subheader("🛠️ Prompt 修复工具")
+        st.caption("如果自动加载失败，请手动上传 JSON 文件：")
+        
+        # 📂 手动上传入口
+        uploaded_prompt_file = st.file_uploader("上传 final_prompts_translated.json", type="json")
+        
+        if uploaded_prompt_file is not None:
+            if st.button("▶️ 开始匹配并导入 Prompt"):
+                try:
+                    # 读取上传的 JSON
+                    data = json.load(uploaded_prompt_file)
+                    st.info(f"文件包含 {len(data)} 条数据，开始匹配数据库...")
+                    
+                    conn = sqlite3.connect(DB_PATH)
+                    cursor = conn.cursor()
+                    
+                    # 开启事务加速
+                    cursor.execute("BEGIN TRANSACTION")
+                    updated_count = 0
+                    
+                    # 进度条
+                    prog = st.progress(0)
+                    
+                    for i, (key, value) in enumerate(data.items()):
+                        # 确保 value 是字符串
+                        p_text = value if isinstance(value, str) else str(value)
+                        
+                        # 核心匹配逻辑：文件名包含 Key 就算匹配
+                        # 例如 Key="char_anim_01", Filepath=".../char_anim_01_dalle3..." -> 匹配成功
+                        cursor.execute("UPDATE images SET prompt_text = ? WHERE filepath LIKE ?", 
+                                       (p_text, f"%{key}%"))
+                        updated_count += cursor.rowcount
+                        
+                        if i % 100 == 0:
+                            prog.progress(min((i+1)/len(data), 1.0))
+                            
+                    cursor.execute("COMMIT")
+                    conn.close()
+                    
+                    if updated_count > 0:
+                        st.success(f"🎉 成功！更新了 {updated_count} 张图片的 Prompt！")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("❌ 匹配失败：更新了 0 条数据。")
+                        st.warning("可能原因：JSON里的 Key 和数据库里的文件名对应不上。")
+                        st.write("JSON Key 示例:", list(data.keys())[:3])
+                        
+                except Exception as e:
+                    st.error(f"导入出错: {e}")
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -405,6 +427,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

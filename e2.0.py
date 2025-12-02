@@ -261,16 +261,36 @@ def main():
     # 3. 获取用户 ID
     current_user = get_user_id()
 
-    # 4. 侧边栏
+    # 4. 侧边栏 (SideBar) - 经过安全改造
     with st.sidebar:
         st.title("👤 评分系统 Pro")
-        st.info(f"ID: **{current_user}**")
-        st.caption("不同设备访问会自动分配不同ID")
         
+        # --- 用户身份区域 ---
+        st.info(f"当前 ID: **{current_user}**")
+        st.caption("⚠️ 注意：请保留当前浏览器地址栏的链接！如果关闭网页，下次需通过下方输入框找回此ID，否则进度会丢失。")
+        
+        # --- 找回旧ID的功能 ---
+        with st.expander("🔐 找回之前的进度"):
+            input_id = st.text_input("输入旧的 ID (例如 user_xxx)", key="restore_id_input")
+            if st.button("恢复身份"):
+                if input_id:
+                    st.query_params["user"] = input_id.strip()
+                    st.session_state.user_id = input_id.strip()
+                    st.rerun()
+
         st.divider()
-        if st.button("🔄 刷新/重新拉取数据"):
-            init_database()
-            load_images_from_cloudinary_to_db(force_refresh=True)
+        
+        # --- 危险操作区域 (加密码锁) ---
+        # 只有输入正确密码，才能看到刷新按钮
+        admin_pwd = st.text_input("管理员密码 (非管理员勿动)", type="password", key="admin_pwd")
+        if admin_pwd == "123456":  # 👈 你可以在这里修改密码
+            st.error("⚠️ 危险区域")
+            if st.button("🔥 强制清空并重拉数据"):
+                init_database()
+                load_images_from_cloudinary_to_db(force_refresh=True)
+        else:
+            # 普通用户只能看到这个
+            st.caption("管理员功能已隐藏")
 
     # 5. 读取数据
     conn = sqlite3.connect(DB_PATH)
@@ -369,3 +389,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

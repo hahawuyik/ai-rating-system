@@ -124,45 +124,56 @@ def auto_load_local_prompts():
     conn.close()
 
 # ===== Cloudinary 拉取 =====
+# ===== 🛡️ 安全版：加载数据 (不删除旧ID) =====
 def load_images_from_cloudinary_to_db(force_refresh=False):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # 如果不是强制刷新，且数据库里有图，就直接跳过
     if not force_refresh:
         cursor.execute("SELECT COUNT(*) FROM images")
         if cursor.fetchone()[0] > 0:
             conn.close()
-            # 🔥 即使不拉取图片，也要检查一下 Prompt 是否需要加载
+            # 顺便检查一下Prompt
             auto_load_local_prompts()
             return
 
     placeholder = st.empty()
-    placeholder.info(f"🔍 正在从 Cloudinary 恢复数据列表...")
+    placeholder.info(f"🔍 正在同步 Cloudinary 数据...")
     
-    if force_refresh:
-        cursor.execute("DELETE FROM images")
-        conn.commit()
-
+    # ❌ [删除这就话] 绝对不要再清空表了！
+    # if force_refresh:
+    #     cursor.execute("DELETE FROM images") 
+    
     try:
         subfolders_result = cloudinary.api.subfolders(CLOUDINARY_ROOT_FOLDER)
         subfolders = subfolders_result.get('folders', [])
-        total_loaded = 0
+        total_added = 0
+        total_skipped = 0
+        
         progress_bar = st.progress(0)
         
         for idx, folder in enumerate(subfolders):
             folder_path = folder['path']
             model_id = folder_path.split('/')[-1]
             next_cursor = None
+            
             while True:
                 try:
-                    time.sleep(0.2)
+                    time.sleep(0.1) #稍微防一下限流
                     resources = cloudinary.api.resources(
                         type="upload", folders=folder_path, max_results=100,
                         next_cursor=next_cursor, resource_type="image"
                     )
                     batch = resources.get("resources", [])
                     if not batch: break
+                        
                     for res in batch:
                         full_public_id = res["public_id"]
+                        
+                        # 🛡️ 核心修改：使用 INSERT OR IGNORE
+                        # 意思：如果这个 filepath 已经在数据库里了，就什么都不做（保留旧ID）
+                        # 如果不在，才插入新的。
                         actual_filename = full_public_id.split('/')[-1]
                         prompt_id = actual_filename
                         image_number = 1
@@ -174,7 +185,7 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                         context = res.get("context", {}).get("custom", {})
                         
                         cursor.execute('''
-                            INSERT OR REPLACE INTO images (
+                            INSERT OR IGNORE INTO images (
                                 prompt_id, model_id, image_number, filepath,
                                 prompt_text, type, style, model_name, quality_tier, generation_time
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -187,10 +198,16 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                             context.get("quality_tier", "medium"),
                             res.get("created_at", datetime.now().isoformat())
                         ))
-                        total_loaded += 1
+                        
+                        if cursor.rowcount > 0:
+                            total_added += 1
+                        else:
+                            total_skipped += 1
+                            
                     conn.commit()
                     next_cursor = resources.get("next_cursor")
                     if not next_cursor: break
+                    
                 except Exception as e:
                     if "420" in str(e):
                         conn.close(); placeholder.empty(); return
@@ -202,11 +219,11 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
     
     conn.close()
     
-    # 🔥 图片列表拉取完毕后，立即运行 Prompt 自动填充
+    # 同步完图片后，再同步Prompt
     auto_load_local_prompts()
     
-    placeholder.success(f"✅ 恢复完成！")
-    time.sleep(1)
+    placeholder.success(f"✅ 同步完成！新增 {total_added} 张，跳过 {total_skipped} 张。")
+    time.sleep(2)
     placeholder.empty()
     st.rerun()
 
@@ -492,6 +509,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

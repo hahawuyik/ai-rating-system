@@ -152,6 +152,7 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
     cursor = conn.cursor()
     
     loaded_count = 0
+    total_expected = 4000  # 期望的图片总数
     
     st.info(f"🔍 从Cloudinary拉取资源：{CLOUDINARY_ROOT_FOLDER}/*")
 
@@ -163,160 +164,137 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
     try:
         cloudinary.api.ping()
         st.success(f"✅ Cloudinary API连通正常！")
+
+        # 获取所有子文件夹
+        st.info("📂 获取子文件夹列表...")
+        subfolders_result = cloudinary.api.subfolders(CLOUDINARY_ROOT_FOLDER)
+        subfolders = subfolders_result.get('folders', [])
         
-        # 修改：直接使用resources_by_tag或其他方法获取所有图片
-        # Cloudinary API的folders参数可能有问题，我们尝试不同的方法
-        
-        st.info("🔄 尝试不同的Cloudinary API调用方法...")
-        
-        # 方法1: 使用resources_by_tag（如果所有图片都打了标签）
-        try:
-            # 获取所有资源，不分文件夹
-            all_resources = cloudinary.api.resources(
-                type="upload",
-                max_results=500,
-                resource_type="image"
-            )
-            
-            st.info(f"📊 Cloudinary账户中共有 {all_resources.get('total_count', 0)} 个资源")
-            
-            # 过滤出我们目标文件夹的资源
-            target_resources = []
-            for res in all_resources.get('resources', []):
-                public_id = res.get('public_id', '')
-                if public_id.startswith(f"{CLOUDINARY_ROOT_FOLDER}/"):
-                    target_resources.append(res)
-            
-            st.info(f"✅ 找到 {len(target_resources)} 个目标文件夹中的资源")
-            
-            # 如果没有找到资源，尝试其他方法
-            if len(target_resources) == 0:
-                st.warning("⚠️ 未在指定文件夹中找到资源，尝试直接搜索...")
-                
-                # 获取所有资源，然后手动过滤
-                all_resources = cloudinary.api.resources(
-                    type="upload",
-                    max_results=1000,
-                    resource_type="image"
-                )
-                
-                target_resources = []
-                for res in all_resources.get('resources', []):
-                    public_id = res.get('public_id', '')
-                    # 检查是否包含目标文件夹
-                    if f"/{CLOUDINARY_ROOT_FOLDER}/" in public_id or public_id.startswith(f"{CLOUDINARY_ROOT_FOLDER}/"):
-                        target_resources.append(res)
-                
-                st.info(f"📊 通过直接搜索找到 {len(target_resources)} 个资源")
-            
-        except Exception as e:
-            st.error(f"❌ 获取资源列表失败: {str(e)}")
+        if not subfolders:
+            st.error(f"❌ 在 '{CLOUDINARY_ROOT_FOLDER}' 下没有找到子文件夹")
             return 0
-        
-        if len(target_resources) == 0:
-            st.error("❌ 未找到任何资源，请检查Cloudinary配置和文件夹名称")
-            return 0
+            
+        st.success(f"✅ 找到 {len(subfolders)} 个子文件夹")
         
         # 进度条
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # 按模型分组处理
-        model_groups = {}
-        for res in target_resources:
-            public_id = res.get('public_id', '')
-            # 提取模型ID
-            parts = public_id.split('/')
-            if len(parts) >= 3:
-                model_id = parts[-2]  # 倒数第二部分是模型文件夹
-                if model_id not in model_groups:
-                    model_groups[model_id] = []
-                model_groups[model_id].append(res)
-        
-        st.success(f"✅ 找到 {len(model_groups)} 个模型的图片")
-        
-        for idx, (model_id, resources) in enumerate(model_groups.items()):
-            status_text.text(f"🔄 处理模型: {model_id} ({idx+1}/{len(model_groups)})")
+        for folder_idx, folder in enumerate(subfolders):
+            folder_path = folder['path']
+            model_id = folder_path.split('/')[-1]
             
-            for res in resources:
-                public_id = res.get('public_id', '')
-                format = res.get('format', '').lower()
-                
-                # 跳过非图片文件
-                if not is_image_file(public_id, format):
-                    continue
-                
-                # 提取文件名（不含扩展名和路径）
-                filename_with_ext = os.path.basename(public_id)
-                filename = os.path.splitext(filename_with_ext)[0]
-                
-                # 解析文件名
-                parts = filename.split('_')
-                
-                # 确定prompt_id和image_number
-                prompt_id = filename
-                image_number = 1
-                
-                # 尝试从文件名中提取信息
-                if len(parts) >= 5:
-                    # 查找模型名在文件名中的位置
-                    for i, part in enumerate(parts):
-                        if part == model_id or part in model_id:
-                            # 模型名之前的部分作为prompt_id
-                            prompt_id = '_'.join(parts[:i]) if i > 0 else filename
-                            # 模型名之后的数字作为image_number
-                            if i+1 < len(parts) and parts[i+1].isdigit():
-                                image_number = int(parts[i+1])
-                            break
-                
-                # 读取自定义元数据
-                context = res.get("context", {}).get("custom", {})
-                
-                # 尝试从同名的JSON文件读取更多元数据
-                json_public_id = public_id + ".info.json"
+            status_text.text(f"📁 处理文件夹: {folder_path} ({folder_idx+1}/{len(subfolders)})")
+            
+            # 分页获取该文件夹下的所有资源
+            next_cursor = None
+            folder_loaded = 0
+            
+            while True:
                 try:
-                    json_resource = cloudinary.api.resource(json_public_id, resource_type="raw")
-                    if json_resource.get("context", {}).get("custom"):
-                        context.update(json_resource["context"]["custom"])
-                except:
-                    pass
-                
-                metadata = {
-                    "prompt": context.get("prompt", f"Prompt: {prompt_id}"),
-                    "type": context.get("type", "unknown"),
-                    "style": context.get("style", "unknown"),
-                    "model_name": context.get("model_name", model_id),
-                    "quality_tier": context.get("quality_tier", "medium"),
-                    "generation_time": res.get("created_at", datetime.now().isoformat())
-                }
-                
-                # 插入或更新数据库记录
-                cursor.execute('''
-                    INSERT OR REPLACE INTO images (
-                        prompt_id, model_id, image_number, filepath,
-                        prompt_text, type, style, model_name, quality_tier, generation_time
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    prompt_id,
-                    model_id,
-                    image_number,
-                    public_id,  # 使用完整的public_id
-                    metadata["prompt"],
-                    metadata["type"],
-                    metadata["style"],
-                    metadata["model_name"],
-                    metadata["quality_tier"],
-                    metadata["generation_time"]
-                ))
-                
-                loaded_count += 1
-                
-                if loaded_count % 50 == 0:
-                    conn.commit()
-                    status_text.text(f"✅ 已加载 {loaded_count} 张图片...")
+                    resources = cloudinary.api.resources(
+                        type="upload",
+                        folders=folder_path,
+                        max_results=500,
+                        next_cursor=next_cursor,
+                        resource_type="image"
+                    )
+                    
+                    next_cursor = resources.get("next_cursor")
+                    batch_resources = resources.get("resources", [])
+                    
+                    if not batch_resources:
+                        st.warning(f"⚠️ 文件夹 {folder_path} 中没有图片资源")
+                        break
+                        
+                    for res in batch_resources:
+                        filename = res["public_id"]  # 注意：这里只返回文件名，不包含路径
+                        
+                        # 🔥 关键：使用完整的public_id作为filepath
+                        full_public_id = f"{folder_path}/{filename}"
+                        
+                        # 解析文件名：格式为 char_fant_01_dalle3_1_xxxx
+                        parts = filename.split('_')
+                        
+                        # 确定prompt_id和image_number
+                        if len(parts) >= 5:
+                            # 找到模型名在文件名中的位置
+                            for i, part in enumerate(parts):
+                                if part in [model_id, model_id.replace('_', '')]:
+                                    # 模型名之前的部分作为prompt_id
+                                    prompt_id = '_'.join(parts[:i])
+                                    # 模型名之后的数字作为image_number
+                                    if i+1 < len(parts) and parts[i+1].isdigit():
+                                        image_number = int(parts[i+1])
+                                    else:
+                                        image_number = 1
+                                    break
+                            else:
+                                # 如果没找到模型名，使用简化逻辑
+                                prompt_id = '_'.join(parts[:-2]) if len(parts) >= 3 else filename
+                                image_number = int(parts[-2]) if len(parts)>=2 and parts[-2].isdigit() else 1
+                        else:
+                            prompt_id = '_'.join(parts[:-1]) if len(parts) > 1 else filename
+                            image_number = int(parts[-1]) if parts[-1].isdigit() else 1
+                        
+                        # 读取自定义元数据
+                        context = res.get("context", {}).get("custom", {})
+                        
+                        # 尝试从同名的JSON文件读取更多元数据
+                        json_public_id = full_public_id + ".info.json"
+                        try:
+                            json_resource = cloudinary.api.resource(json_public_id, resource_type="raw")
+                            if json_resource.get("context", {}).get("custom"):
+                                context.update(json_resource["context"]["custom"])
+                        except:
+                            pass
+                        
+                        metadata = {
+                            "prompt": context.get("prompt", f"Prompt: {prompt_id}"),
+                            "type": context.get("type", "unknown"),
+                            "style": context.get("style", "unknown"),
+                            "model_name": context.get("model_name", model_id),
+                            "quality_tier": context.get("quality_tier", "medium"),
+                            "generation_time": res.get("created_at", datetime.now().isoformat())
+                        }
+                        
+                        # 插入或更新数据库记录
+                        cursor.execute('''
+                            INSERT OR REPLACE INTO images (
+                                prompt_id, model_id, image_number, filepath,
+                                prompt_text, type, style, model_name, quality_tier, generation_time
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            prompt_id,
+                            model_id,
+                            image_number,
+                            full_public_id,  # 🔥 使用完整的public_id
+                            metadata["prompt"],
+                            metadata["type"],
+                            metadata["style"],
+                            metadata["model_name"],
+                            metadata["quality_tier"],
+                            metadata["generation_time"]
+                        ))
+                        
+                        loaded_count += 1
+                        folder_loaded += 1
+                        
+                        if loaded_count % 100 == 0:
+                            conn.commit()
+                            status_text.text(f"✅ 已加载 {loaded_count} 张图片...")
+                    
+                    # 更新进度条
+                    progress_bar.progress(min((folder_idx + 1) / len(subfolders), 1.0))
+                    
+                    if not next_cursor:
+                        break
+                        
+                except Exception as e:
+                    st.error(f"❌ 处理文件夹 {folder_path} 时出错: {str(e)}")
+                    break
             
-            # 更新进度条
-            progress_bar.progress(min((idx + 1) / len(model_groups), 1.0))
+            st.info(f"📊 从 {folder_path} 加载了 {folder_loaded} 张图片")
         
         conn.commit()
         
@@ -337,10 +315,12 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
             
             # 显示总体统计
             st.subheader("📈 总体统计")
+            st.write(f"**期望总数**: {total_expected} 张")
             st.write(f"**实际加载**: {total_loaded} 张")
+            st.write(f"**完成率**: {(total_loaded / total_expected * 100):.1f}%")
             
-            if total_loaded < 100:  # 如果加载的图片很少，给出警告
-                st.warning(f"⚠️ 只加载了 {total_loaded} 张图片，可能没有正确获取所有资源")
+            if total_loaded < total_expected:
+                st.warning(f"⚠️ 只加载了 {total_loaded}/{total_expected} 张图片，可能还有图片未被加载")
         else:
             st.error("❌ 没有加载任何图片到数据库")
         
@@ -355,21 +335,67 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
     return loaded_count
 
 # ===== 生成Cloudinary图片可访问URL =====
-def get_cloud_image_url(public_id: str) -> str:
+def get_cloud_image_url(filepath: str, model_id: str) -> str:
     """
-    根据public_id生成正确的Cloudinary URL
+    根据filepath和model_id生成正确的Cloudinary URL
     """
     try:
+        # 🔥 关键修改：修正public_id的构建方式
+        # 如果filepath已经是完整路径，直接使用；否则构建完整路径
+        if filepath.startswith("ai-rating-images/"):
+            public_id = filepath
+        else:
+            # 从filepath中提取基本文件名
+            # filepath可能是：conc_pike_07_sd4
+            # 需要构建为：ai-rating-images/dalle3/conc_pike_07_sd4_turbo_3_5cgkm
+            # 但是我们不知道随机字符部分
+            
+            # 尝试从Cloudinary搜索这个文件
+            # 首先，获取该文件夹下的所有文件
+            search_prefix = f"ai-rating-images/{model_id}/"
+            
+            try:
+                # 搜索包含基本文件名的资源
+                resources = cloudinary.api.resources(
+                    type="upload",
+                    prefix=search_prefix,
+                    max_results=100
+                )
+                
+                # 查找匹配的文件
+                for res in resources.get('resources', []):
+                    res_name = res['public_id'].split('/')[-1]
+                    # 检查是否包含基本文件名
+                    if filepath in res_name:
+                        public_id = res['public_id']
+                        break
+                else:
+                    # 如果没找到，使用原始filepath尝试
+                    public_id = f"ai-rating-images/{model_id}/{filepath}"
+                    
+            except Exception:
+                public_id = f"ai-rating-images/{model_id}/{filepath}"
+        
         # 先校验资源是否存在
         try:
-            resource = cloudinary.api.resource(public_id, resource_type="image")
-            # 确保是图片
-            if not is_image_file(public_id, resource.get('format', '')):
-                st.warning(f"⚠️ {public_id} 不是图片文件")
-                return "https://via.placeholder.com/800x800?text=Not+Image"
+            cloudinary.api.resource(public_id, resource_type="image")
         except NotFound:
-            st.warning(f"⚠️ 图片不存在: {public_id}")
-            return "https://via.placeholder.com/800x800?text=Image+Not+Found"
+            st.warning(f"⚠️ 尝试的Public ID不存在: {public_id}")
+            # 尝试其他可能的格式
+            # 可能是filepath缺少随机字符部分
+            # 尝试搜索最接近的文件
+            resources = cloudinary.api.resources(
+                type="upload",
+                prefix=f"ai-rating-images/{model_id}/",
+                max_results=10
+            )
+            
+            if resources.get('resources'):
+                # 使用第一个找到的文件作为测试
+                public_id = resources['resources'][0]['public_id']
+                st.info(f"🔍 使用替代文件: {public_id}")
+            else:
+                return "https://via.placeholder.com/800x800?text=Image+Not+Found"
         
         # 生成优化后的URL：限制尺寸、自动质量压缩
         url, _ = cloudinary_url(
@@ -379,7 +405,7 @@ def get_cloud_image_url(public_id: str) -> str:
             height=800,
             crop="limit",
             quality="auto:good",
-            format="auto",
+            format="auto",  # 自动检测格式，因为文件没有扩展名
             secure=True
         )
         return url
@@ -515,82 +541,6 @@ def show_statistics():
     st.subheader("评分员完成度统计")
     st.dataframe(evaluator_stats)
 
-# ===== 快速诊断函数 =====
-def quick_diagnostic():
-    """快速诊断函数"""
-    st.title("🚨 快速诊断")
-    
-    st.info("正在测试Cloudinary连接...")
-    try:
-        result = cloudinary.api.ping()
-        st.success("✅ Cloudinary API连接成功")
-    except Exception as e:
-        st.error(f"❌ API连接失败: {str(e)}")
-        return
-    
-    # 检查目标文件夹
-    st.info(f"检查文件夹: {CLOUDINARY_ROOT_FOLDER}")
-    try:
-        # 首先尝试获取所有资源
-        all_resources = cloudinary.api.resources(
-            type="upload",
-            max_results=100,
-            resource_type="image"
-        )
-        
-        total = all_resources.get('total_count', 0)
-        actual_resources = all_resources.get('resources', [])
-        
-        if actual_resources:
-            st.success(f"✅ Cloudinary账户中共有 {total} 个资源")
-            
-            # 查找目标文件夹中的资源
-            target_resources = []
-            for res in actual_resources:
-                public_id = res.get('public_id', '')
-                if f"{CLOUDINARY_ROOT_FOLDER}/" in public_id:
-                    target_resources.append(res)
-            
-            if target_resources:
-                st.success(f"✅ 在 {CLOUDINARY_ROOT_FOLDER} 中找到 {len(target_resources)} 个资源")
-                
-                # 显示前几个资源
-                for i, res in enumerate(target_resources[:5]):
-                    st.write(f"{i+1}. `{res['public_id']}` - 格式: {res.get('format', 'unknown')}")
-                    
-                    # 尝试显示图片预览
-                    try:
-                        thumb_url, _ = cloudinary_url(
-                            res['public_id'],
-                            width=200,
-                            height=200,
-                            crop="fill",
-                            quality="auto:low"
-                        )
-                        st.image(thumb_url, caption=res['public_id'], width=200)
-                    except:
-                        st.write("无法生成预览")
-            else:
-                st.warning(f"⚠️ 在 {CLOUDINARY_ROOT_FOLDER} 中没有找到资源")
-                
-                # 列出所有资源的前缀
-                st.write("📋 所有资源的前缀:")
-                prefixes = set()
-                for res in actual_resources[:20]:
-                    public_id = res.get('public_id', '')
-                    if '/' in public_id:
-                        prefix = public_id.split('/')[0]
-                        prefixes.add(prefix)
-                
-                st.write("检测到的文件夹前缀:")
-                for prefix in sorted(prefixes):
-                    st.write(f"- `{prefix}`")
-                
-        else:
-            st.error("❌ Cloudinary账户中没有资源")
-    except Exception as e:
-        st.error(f"检查失败: {str(e)}")
-
 # ===== 核心评分页面 =====
 def main_rating_page():
     # 初始化Session State
@@ -636,20 +586,138 @@ def main_rating_page():
         show_unevaluated = st.checkbox("显示未评分", value=True, key="show_uneval")
         st.markdown("---")
         
-        page_nav = st.radio("导航", ["📝 评分", "📊 统计分析", "🚨 快速诊断"], key="page_nav")
-        
+        page_nav = st.radio("导航", ["📝 评分", "📊 统计分析"], key="page_nav")
+
+    # 在侧边栏添加一个测试特定文件夹的功能
+    with st.sidebar:
         st.markdown("---")
-        if st.button("🔄 重新从Cloudinary加载数据"):
-            with st.spinner("重新加载数据中..."):
-                load_images_from_cloudinary_to_db(force_refresh=True)
-                st.rerun()
+        st.subheader("🔬 高级测试")
+        
+        test_subfolder = st.selectbox(
+            "测试子文件夹",
+            ["dalle3", "dreamshaper", "sd15", "sdxl_turbo"],
+            key="test_subfolder"
+        )
+        
+        if st.button("测试子文件夹内容"):
+            try:
+                st.info(f"🔍 测试Cloudinary API调用...")
+                
+                # 测试1: 检查文件夹是否存在
+                try:
+                    folders = cloudinary.api.subfolders(f"{CLOUDINARY_ROOT_FOLDER}")
+                    st.write("📂 文件夹列表:")
+                    if folders.get('folders'):
+                        for folder in folders['folders']:
+                            st.write(f"- {folder['path']}")
+                    else:
+                        st.warning("⚠️ 没有找到任何子文件夹")
+                except Exception as e:
+                    st.warning(f"获取子文件夹列表失败: {str(e)}")
+                
+                st.markdown("---")
+                
+                # 测试2: 尝试不同参数组合
+                st.write("🔄 尝试不同参数组合:")
+                
+                # 组合1: 使用prefix参数
+                st.write("**组合1 - 使用prefix参数:**")
+                resources1 = cloudinary.api.resources(
+                    type="upload",
+                    prefix=f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}/",
+                    max_results=10
+                )
+                st.write(f"返回资源数量: {len(resources1.get('resources', []))}")
+                
+                # 组合2: 指定resource_type
+                st.write("**组合2 - 指定resource_type='image':**")
+                resources2 = cloudinary.api.resources(
+                    type="upload",
+                    prefix=f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}/",
+                    max_results=10,
+                    resource_type="image"
+                )
+                st.write(f"返回资源数量: {len(resources2.get('resources', []))}")
+                
+                # 组合3: 使用folders参数
+                st.write("**组合3 - 使用folders参数:**")
+                try:
+                    resources3 = cloudinary.api.resources(
+                        type="upload",
+                        folders=f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}",
+                        max_results=10
+                    )
+                    st.write(f"返回资源数量: {len(resources3.get('resources', []))}")
+                except Exception as e:
+                    st.write(f"folders参数失败: {str(e)}")
+                
+                # 组合4: 不使用任何过滤，获取所有资源
+                st.write("**组合4 - 获取所有资源(无过滤):**")
+                all_resources = cloudinary.api.resources(
+                    type="upload",
+                    max_results=100
+                )
+                
+                total_all = all_resources.get('total_count', 0)
+                st.write(f"Cloudinary账户中共有 {total_all} 个上传资源")
+                
+                # 查找包含目标文件夹的资源
+                if total_all > 0:
+                    found_in_all = []
+                    for res in all_resources.get('resources', [])[:50]:  # 检查前50个
+                        if f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}" in res.get('public_id', ''):
+                            found_in_all.append(res['public_id'])
+                    
+                    if found_in_all:
+                        st.success(f"✅ 在全部资源中找到 {len(found_in_all)} 个匹配项:")
+                        for item in found_in_all[:5]:
+                            st.write(f"- {item}")
+                    else:
+                        st.warning("⚠️ 在全部资源中未找到目标文件夹的内容")
+                
+                # 检查具体的错误信息
+                st.markdown("---")
+                st.write("📊 API响应详情:")
+                
+                # 输出resources1的完整响应
+                if resources1.get('resources'):
+                    st.success("✅ 组合1找到了资源！")
+                    for i, res in enumerate(resources1['resources'][:5]):
+                        st.write(f"{i+1}. `{res['public_id']}`")
+                        
+                        # 显示图片预览
+                        if res.get('format') in ['png', 'jpg', 'jpeg', 'webp']:
+                            thumb_url, _ = cloudinary_url(
+                                res['public_id'],
+                                width=100,
+                                height=100,
+                                crop="fill",
+                                quality="auto:low"
+                            )
+                            st.image(thumb_url, width=100)
+                else:
+                    st.error("❌ 所有API调用都未返回资源")
+                    st.write("尝试使用更低级别的API...")
+                    
+                    # 尝试直接调用resource方法测试一个已知文件
+                    test_filename = f"{CLOUDINARY_ROOT_FOLDER}/{test_subfolder}/char_fant_01_{test_subfolder}_1"
+                    st.write(f"尝试直接获取文件: `{test_filename}`")
+                    try:
+                        test_resource = cloudinary.api.resource(test_filename)
+                        st.success(f"✅ 成功获取文件: {test_resource['public_id']}")
+                    except NotFound:
+                        st.error("❌ 文件不存在，可能文件名不正确")
+                    except Exception as e:
+                        st.error(f"❌ 获取失败: {str(e)}")
+                        
+            except Exception as e:
+                st.error(f"测试失败: {str(e)}")
+                import traceback
+                st.error(f"详细错误信息: {traceback.format_exc()}")
 
     # 如果切换到统计页面，直接跳转
     if page_nav == "📊 统计分析":
         show_statistics()
-        return
-    elif page_nav == "🚨 快速诊断":
-        quick_diagnostic()
         return
 
     # 主页面：数据筛选 & 展示
@@ -701,10 +769,6 @@ def main_rating_page():
     # 无数据提示
     if len(images_df) == 0:
         st.warning("⚠️ 没有符合条件的图片")
-        if st.button("🔄 从Cloudinary加载图片"):
-            with st.spinner("加载图片中..."):
-                load_images_from_cloudinary_to_db()
-                st.rerun()
         return
 
     # 分页逻辑
@@ -746,9 +810,9 @@ def main_rating_page():
             # 左侧：图片展示
             with col_img:
                 # 使用修正后的函数
-                img_url = get_cloud_image_url(row['filepath'])
+                img_url = get_cloud_image_url(row['filepath'], row['model_id'])
                 
-                # 显示图片
+                # 显示图片和调试信息
                 st.image(img_url, use_container_width=True)
                 
                 # 添加调试信息
@@ -852,6 +916,183 @@ def main_rating_page():
                     save_evaluation(row['id'], evaluator_id, evaluator_name, scores)
                     # 刷新页面以显示最新评分
                     st.rerun()
+
+# 添加一个直接测试具体文件的功能
+def test_specific_file():
+    st.subheader("📁 直接路径测试")
+    
+    # 手动输入文件路径进行测试
+    test_path = st.text_input(
+        "输入完整的Cloudinary Public ID",
+        value=f"{CLOUDINARY_ROOT_FOLDER}/dalle3/conc_anim_07_dalle3_1_pqaazq",
+        key="test_path"
+    )
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("测试文件是否存在"):
+            try:
+                resource = cloudinary.api.resource(test_path)
+                st.success(f"✅ 文件存在: {resource['public_id']}")
+                st.write(f"**格式:** {resource.get('format', 'unknown')}")
+                st.write(f"**尺寸:** {resource.get('width', 0)}x{resource.get('height', 0)}")
+                st.write(f"**创建时间:** {resource.get('created_at', 'unknown')}")
+                
+                # 显示图片
+                img_url, _ = cloudinary_url(
+                    test_path,
+                    width=400,
+                    height=400,
+                    crop="limit",
+                    quality="auto:good"
+                )
+                st.image(img_url)
+                
+            except NotFound:
+                st.error(f"❌ 文件不存在: {test_path}")
+                
+                # 尝试查找类似文件
+                st.write("尝试查找类似文件...")
+                try:
+                    all_resources = cloudinary.api.resources(
+                        type="upload",
+                        prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
+                        max_results=50
+                    )
+                    
+                    found_similar = []
+                    for res in all_resources.get('resources', []):
+                        if test_subfolder in res['public_id']:
+                            found_similar.append(res['public_id'])
+                    
+                    if found_similar:
+                        st.info(f"找到 {len(found_similar)} 个类似文件:")
+                        for file in found_similar[:5]:
+                            st.write(f"- {file}")
+                    else:
+                        st.warning("没有找到任何类似文件")
+                        
+                except Exception as e:
+                    st.error(f"查找失败: {str(e)}")
+                    
+            except Exception as e:
+                st.error(f"测试失败: {str(e)}")
+    
+    with col2:
+        if st.button("列出文件夹内容"):
+            # 提取文件夹路径
+            if "/" in test_path:
+                folder_path = "/".join(test_path.split("/")[:-1])
+                st.write(f"文件夹路径: `{folder_path}`")
+                
+                try:
+                    # 列出文件夹内容
+                    folder_resources = cloudinary.api.resources(
+                        type="upload",
+                        prefix=folder_path + "/",
+                        max_results=20
+                    )
+                    
+                    if folder_resources.get('resources'):
+                        st.success(f"✅ 找到 {len(folder_resources['resources'])} 个文件:")
+                        for res in folder_resources['resources']:
+                            format_icon = "🖼️" if res.get('format') in ['png', 'jpg', 'jpeg'] else "📄"
+                            st.write(f"{format_icon} {res['public_id']}")
+                    else:
+                        st.error("❌ 文件夹为空")
+                        
+                except Exception as e:
+                    st.error(f"列出失败: {str(e)}")
+
+def quick_diagnostic():
+    """快速诊断函数"""
+    st.title("🚨 快速诊断")
+    
+    st.info("正在测试Cloudinary连接...")
+    try:
+        result = cloudinary.api.ping()
+        st.success("✅ Cloudinary API连接成功")
+    except Exception as e:
+        st.error(f"❌ API连接失败: {str(e)}")
+        return
+    
+    # 检查目标文件夹
+    st.info(f"检查文件夹: {CLOUDINARY_ROOT_FOLDER}")
+    try:
+        resources = cloudinary.api.resources(
+            type="upload",
+            prefix=f"{CLOUDINARY_ROOT_FOLDER}/",
+            max_results=20
+        )
+        
+        total = resources.get('total_count', 0)
+        actual_resources = resources.get('resources', [])
+        
+        if actual_resources:
+            st.success(f"✅ 找到 {total} 个资源")
+            
+            # 分类统计
+            image_files = []
+            json_files = []
+            other_files = []
+            
+            for res in actual_resources:
+                public_id = res["public_id"]
+                format = res.get("format", "").lower()
+                
+                if ".info.json" in public_id or format == "json":
+                    json_files.append(public_id)
+                elif format in ["png", "jpg", "jpeg", "webp", "gif"]:
+                    image_files.append(public_id)
+                else:
+                    other_files.append(public_id)
+            
+            st.info(f"📊 分类统计:")
+            st.write(f"- 图片文件: {len(image_files)} 个")
+            st.write(f"- JSON文件: {len(json_files)} 个")
+            st.write(f"- 其他文件: {len(other_files)} 个")
+            
+            if image_files:
+                st.write("📸 图片文件示例:")
+                for img in image_files[:5]:
+                    st.write(f"  - `{img}`")
+            
+            if json_files:
+                st.write("📝 JSON文件示例:")
+                for json_file in json_files[:3]:
+                    st.write(f"  - `{json_file}`")
+                    
+            # 测试文件解析
+            if image_files:
+                test_file = image_files[0]
+                st.info(f"🔍 测试文件解析: `{test_file}`")
+                path_parts = test_file.split("/")
+                if len(path_parts) >= 3:
+                    st.write(f"  - 模型ID: `{path_parts[1]}`")
+                    st.write(f"  - 文件名: `{path_parts[2]}`")
+                    
+                    # 尝试解析
+                    filename_without_ext = os.path.splitext(path_parts[2])[0]
+                    parts = filename_without_ext.split("_")
+                    st.write(f"  - 拆分结果: {parts}")
+                    
+                    # 模拟解析逻辑
+                    if len(parts) >= 4:
+                        model_id = path_parts[1]
+                        for i in range(len(parts)):
+                            if parts[i] == model_id and i+1 < len(parts):
+                                try:
+                                    image_number = int(parts[i+1])
+                                    prompt_id = "_".join(parts[:i])
+                                    st.success(f"  - 解析成功: prompt_id=`{prompt_id}`, image_number={image_number}")
+                                    break
+                                except:
+                                    st.warning(f"  - 解析失败，使用备用方案")
+        else:
+            st.error(f"❌ 没有找到资源")
+    except Exception as e:
+        st.error(f"检查失败: {str(e)}")
 
 # ===== 主入口 =====
 if __name__ == "__main__":

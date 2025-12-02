@@ -288,201 +288,119 @@ def get_existing_score(image_id, user_id):
     return {}
 
 # ===== 主程序 =====
+# ===== 主程序 =====
 def main():
-    #     # ----------------- 🚨 调试代码开始 -----------------
-    # st.markdown("### 🕵️‍♂️ 数据库侦探")
+    # ------------------------------------------------------------------
+    # 1. 🔥 第一步：无论如何，先确保数据库表结构存在！
+    # (init_database 里面有 "IF NOT EXISTS"，所以重复运行也没事，很安全)
+    # ------------------------------------------------------------------
+    init_database()
     
-    # # 1. 打印当前绝对路径
-    # abs_db_path = os.path.abspath(DB_PATH)
-    # st.error(f"📍 程序正在读取的数据库路径是：\n\n`{abs_db_path}`")
-    
-    # # 2. 检查文件是否存在
-    # if os.path.exists(abs_db_path):
-    #     st.warning("⚠️ 发现数据库文件存在！(这就是导致报错的旧文件)")
-        
-    #     # 3. 提供核按钮
-    #     if st.button("💣 点击这里：强制粉碎这个数据库文件！", type="primary"):
-    #         try:
-    #             # 强制断开所有连接
-    #             sqlite3.connect(abs_db_path).close()
-    #             # 删除文件
-    #             os.remove(abs_db_path)
-    #             st.success("✅ 删除成功！请立即刷新网页 (按 F5)")
-    #             time.sleep(2)
-    #             st.rerun()
-    #         except Exception as e:
-    #             st.error(f"删除失败，可能是文件被占用: {e}")
-    # else:
-    #     st.success("✅ 这里的数据库文件已被删除。程序正在准备重新创建...")
-    
-    # st.markdown("---")
-    # # ----------------- 🚨 调试代码结束 -----------------
+    # 2. ⚡ 自动加载数据 (如果数据库是新的，这里会自动拉取)
     load_images_from_cloudinary_to_db(force_refresh=False)
     
+    # 3. 获取当前用户
     current_user = get_user_id()
 
+    # 4. 侧边栏
     with st.sidebar:
         st.title("👤 评分系统 Pro")
         st.info(f"ID: **{current_user}**")
-        st.caption("保留浏览器地址栏链接以保存进度。")
+        st.caption("请保留地址栏链接以保存进度。")
         
+        # 找回进度功能
         with st.expander("🔐 找回之前的进度"):
             input_id = st.text_input("输入旧ID", key="restore_id_input")
             if st.button("恢复"):
-                if input_id: st.query_params["user"]=input_id.strip(); st.session_state.user_id=input_id.strip(); st.rerun()
+                if input_id: 
+                    st.query_params["user"] = input_id.strip()
+                    st.session_state.user_id = input_id.strip()
+                    st.rerun()
         
         st.divider()
-        admin_pwd = st.text_input("管理员密码", type="password", key="admin_pwd")
-        if admin_pwd == "123456":
-            if st.button("⚠️ 强制重置数据库结构"): init_database(); st.success("表结构已更新")
-            # 这里我把手动上传的按钮注释掉了，因为已经自动化了，不需要了
-            # st.file_uploader... 
+        # Prompt 手动修复工具
+        with st.expander("🛠️ Prompt 修复工具"):
+            uploaded_prompt_file = st.file_uploader("上传 final_prompts_translated.json", type="json")
+            if uploaded_prompt_file and st.button("开始导入"):
+                import_prompts_from_json(uploaded_prompt_file)
+                st.success("导入完成！")
+                time.sleep(1)
+                st.rerun()
 
+        # 数据下载功能
         st.divider()
-        st.subheader("📊 数据导出中心")
-        st.caption("点击下方按钮下载云端保存的评分数据")
-
-        # 添加一个刷新按钮，确保读取最新数据
+        st.subheader("📊 数据导出")
         if st.button("🔄 刷新并准备下载"):
-            # 连接数据库
             conn = sqlite3.connect(DB_PATH)
-            
-            # 编写 SQL 查询：把评分表和图片信息表连起来查
-            # 这样导出的表格里既有分数，也有图片文件名和模型
             sql = '''
             SELECT 
-                e.id as ID,
-                e.evaluator_id as 评分员,
-                i.model_id as 模型类型,
-                i.filepath as 图片路径,
-                i.prompt_text as Prompt提示词,
-                e.prompt_adherence as Prompt匹配度,
-                e.overall_quality as 整体评分,
-                e.clarity as 清晰度,
-                e.detail_richness as 细节,
-                e.color_harmony as 色彩,
-                e.perspective_check as 透视,
-                e.asset_cleanliness as 资产干净度,
-                e.style_consistency as 风格一致性,
-                e.structural_logic as 结构,
-                e.is_usable as 是否可用,
-                e.notes as 备注,
-                e.evaluation_time as 提交时间
+                e.id as ID, e.evaluator_id as 评分员, i.model_id as 模型,
+                i.filepath as 路径, i.prompt_text as Prompt,
+                e.prompt_adherence as Prompt匹配度, e.overall_quality as 整体评分,
+                e.clarity as 清晰度, e.detail_richness as 细节, e.color_harmony as 色彩,
+                e.perspective_check as 透视, e.asset_cleanliness as 资产干净度,
+                e.style_consistency as 风格一致性, e.structural_logic as 结构,
+                e.is_usable as 是否可用, e.notes as 备注, e.evaluation_time as 时间
             FROM evaluations e
             LEFT JOIN images i ON e.image_id = i.id
-            ORDER BY e.evaluation_time DESC
+            ORDER BY e.id DESC
             '''
-            
             try:
-                # 使用 pandas 读取数据
-                df_export = pd.read_sql(sql, conn)
+                df = pd.read_sql(sql, conn)
                 conn.close()
-
-                if not df_export.empty:
-                    st.success(f"✅ 成功读取 {len(df_export)} 条记录")
-                    
-                    # 1. 简单预览前3条
-                    with st.expander("👀 预览数据 (前3条)"):
-                        st.dataframe(df_export.head(3))
-
-                    # 2. 生成 CSV 文件
-                    # ⚠️ 关键：使用 utf-8-sig 编码，否则 Excel 打开中文会乱码
-                    csv_data = df_export.to_csv(index=False).encode('utf-8-sig')
-                    
-                    # 3. 显示下载按钮
-                    st.download_button(
-                        label="📥 点击下载 CSV 表格 (Excel可直接打开)",
-                        data=csv_data,
-                        file_name=f"Rating_Data_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv",
-                        type="primary" # 让按钮显眼一点
-                    )
-                else:
-                    st.warning("📭 数据库里暂时还没有评分数据。")
-                    
+                st.dataframe(df.head(3), height=100)
+                st.download_button(
+                    "📥 下载 CSV",
+                    df.to_csv(index=False).encode('utf-8-sig'),
+                    f"data_{datetime.now().strftime('%H%M')}.csv",
+                    "text/csv",
+                    type="primary"
+                )
             except Exception as e:
-                st.error(f"读取数据失败: {e}")
+                st.error(f"读取失败: {e}")
 
-        # st.divider()
-        # st.subheader("🛠️ Prompt 修复工具")
-        # st.caption("如果自动加载失败，请手动上传 JSON 文件：")
-        
-        # # 📂 手动上传入口
-        # uploaded_prompt_file = st.file_uploader("上传 final_prompts_translated.json", type="json")
-        
-        # if uploaded_prompt_file is not None:
-        #     if st.button("▶️ 开始匹配并导入 Prompt"):
-        #         try:
-        #             # 读取上传的 JSON
-        #             data = json.load(uploaded_prompt_file)
-        #             st.info(f"文件包含 {len(data)} 条数据，开始匹配数据库...")
-                    
-        #             conn = sqlite3.connect(DB_PATH)
-        #             cursor = conn.cursor()
-                    
-        #             # 开启事务加速
-        #             cursor.execute("BEGIN TRANSACTION")
-        #             updated_count = 0
-                    
-        #             # 进度条
-        #             prog = st.progress(0)
-                    
-        #             for i, (key, value) in enumerate(data.items()):
-        #                 # 确保 value 是字符串
-        #                 p_text = value if isinstance(value, str) else str(value)
-                        
-        #                 # 核心匹配逻辑：文件名包含 Key 就算匹配
-        #                 # 例如 Key="char_anim_01", Filepath=".../char_anim_01_dalle3..." -> 匹配成功
-        #                 cursor.execute("UPDATE images SET prompt_text = ? WHERE filepath LIKE ?", 
-        #                                (p_text, f"%{key}%"))
-        #                 updated_count += cursor.rowcount
-                        
-        #                 if i % 100 == 0:
-        #                     prog.progress(min((i+1)/len(data), 1.0))
-                            
-        #             cursor.execute("COMMIT")
-        #             conn.close()
-                    
-        #             if updated_count > 0:
-        #                 st.success(f"🎉 成功！更新了 {updated_count} 张图片的 Prompt！")
-        #                 time.sleep(1)
-        #                 st.rerun()
-        #             else:
-        #                 st.error("❌ 匹配失败：更新了 0 条数据。")
-        #                 st.warning("可能原因：JSON里的 Key 和数据库里的文件名对应不上。")
-        #                 st.write("JSON Key 示例:", list(data.keys())[:3])
-                        
-        #         except Exception as e:
-        #             st.error(f"导入出错: {e}")
-    
-
+    # 5. 读取主数据
     conn = sqlite3.connect(DB_PATH)
     try:
         images_df = pd.read_sql("SELECT * FROM images", conn)
-        try: my_evals = pd.read_sql("SELECT COUNT(*) as cnt FROM evaluations WHERE evaluator_id=?", conn, params=(current_user,)).iloc[0]['cnt']
-        except: my_evals = 0
-    except: images_df = pd.DataFrame(); my_evals = 0
+        # 兼容性处理：防止 evaluations 表还没生成时报错
+        try:
+            my_evals = pd.read_sql("SELECT COUNT(*) as cnt FROM evaluations WHERE evaluator_id=?", 
+                               conn, params=(current_user,)).iloc[0]['cnt']
+        except:
+            my_evals = 0
+    except:
+        images_df = pd.DataFrame()
+        my_evals = 0
     conn.close()
 
-    if images_df.empty: st.warning("正在初始化..."); return
+    if images_df.empty:
+        st.warning("⏳ 正在初始化数据库并拉取图片，请稍候... (这可能需要1-2分钟)")
+        # 这里不需要手动 return，让它自然刷新即可
+        return
 
+    # 6. 顶部进度条
     col1, col2, col3 = st.columns(3)
     col1.metric("总图片", len(images_df))
     col2.metric("我的进度", f"{my_evals}")
     col3.metric("完成率", f"{my_evals/len(images_df)*100:.1f}%")
     st.progress(my_evals/len(images_df) if len(images_df)>0 else 0)
 
+    # 7. 分页逻辑
     if 'page_number' not in st.session_state: st.session_state.page_number = 1
     total_pages = len(images_df)
     
     col_prev, col_page, col_next = st.columns([1, 2, 1])
     with col_prev:
-        if st.button("⬅️ 上一张") and st.session_state.page_number > 1: st.session_state.page_number -= 1; st.rerun()
+        if st.button("⬅️ 上一张") and st.session_state.page_number > 1:
+            st.session_state.page_number -= 1; st.rerun()
     with col_page:
         st.session_state.page_number = st.number_input("页码", 1, total_pages, st.session_state.page_number, label_visibility="collapsed")
     with col_next:
-        if st.button("下一张 ➡️") and st.session_state.page_number < total_pages: st.session_state.page_number += 1; st.rerun()
+        if st.button("下一张 ➡️") and st.session_state.page_number < total_pages:
+            st.session_state.page_number += 1; st.rerun()
 
+    # 8. 图片展示与评分表单
     idx = st.session_state.page_number - 1
     if idx < len(images_df):
         row = images_df.iloc[idx]
@@ -490,17 +408,17 @@ def main():
 
         st.markdown("---")
         
-        # 📝 Prompt 自动显示
+        # Prompt 显示
         if row['prompt_text']:
             st.info(f"**📝 Prompt:**\n{row['prompt_text']}")
         else:
-            # 如果本地文件里没有匹配到，才会显示警告
-            st.warning("⚠️ 暂无 Prompt 数据 (正在检查本地文件...)")
+            st.warning("⚠️ 暂无 Prompt (请在侧边栏手动导入 JSON)")
 
         col_img, col_form = st.columns([1.2, 1])
         with col_img:
             st.image(get_cloud_image_url(row['filepath']), use_container_width=True)
-            with st.expander("调试信息"): st.code(f"File: {row['filepath']}\nPrompt ID: {row['prompt_id']}")
+            with st.expander("调试信息"):
+                st.code(f"File: {row['filepath']}\nID: {row['id']}")
                 
         with col_form:
             with st.form(key=f"form_{row['id']}"):
@@ -538,10 +456,15 @@ def main():
                         "overall_quality": overall, "is_usable": is_usable, "notes": notes
                     }
                     if save_evaluation(row['id'], current_user, scores):
-                        if st.session_state.page_number < total_pages: st.session_state.page_number += 1; st.rerun()
+                        if st.session_state.page_number < total_pages: 
+                            st.session_state.page_number += 1
+                            st.rerun()
 
 if __name__ == "__main__":
     main()
+if __name__ == "__main__":
+    main()
+
 
 
 

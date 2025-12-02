@@ -287,7 +287,52 @@ def get_existing_score(image_id, user_id):
     finally: conn.close()
     return {}
 
-# ===== 主程序 =====
+# ===== 📥 本地 Prompt 导入逻辑 (补全这个函数) =====
+def import_prompts_from_json(uploaded_file):
+    """从本地JSON更新数据库的prompt字段"""
+    try:
+        # 读取上传的文件
+        data = json.load(uploaded_file)
+        
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        updated_count = 0
+        
+        # 进度条
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        if isinstance(data, dict):
+            total_items = len(data)
+            # 使用事务处理加速
+            cursor.execute("BEGIN TRANSACTION")
+            
+            for i, (key, value) in enumerate(data.items()):
+                # key 是文件名核心部分 (例如 char_anim_01_dreamshaper_1)
+                # value 是 prompt 文本
+                prompt_text = value if isinstance(value, str) else str(value)
+                
+                # 模糊匹配：只要 filepath 包含 key 就算匹配
+                cursor.execute("UPDATE images SET prompt_text = ? WHERE filepath LIKE ?", 
+                               (prompt_text, f"%{key}%"))
+                
+                updated_count += cursor.rowcount
+                
+                # 每100条更新一次进度条
+                if i % 100 == 0:
+                    progress_bar.progress(min((i + 1) / total_items, 1.0))
+                    status_text.text(f"正在匹配... {i+1}/{total_items}")
+
+            cursor.execute("COMMIT")
+            
+        progress_bar.empty()
+        status_text.empty()
+        conn.close()
+        return updated_count
+        
+    except Exception as e:
+        st.error(f"解析失败: {e}")
+        return 0
 # ===== 主程序 =====
 def main():
     # ------------------------------------------------------------------
@@ -464,6 +509,7 @@ if __name__ == "__main__":
     main()
 if __name__ == "__main__":
     main()
+
 
 
 

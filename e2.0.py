@@ -232,11 +232,17 @@ def get_cloud_image_url(filepath: str) -> str:
     except: return "https://via.placeholder.com/800x800?text=URL+Error"
 
 def save_evaluation(image_id, user_id, scores):
+    # 🛠️ 修复 BUG：强制将 image_id 转为 Python 原生 int
+    # 否则 Pandas 传过来的 numpy.int64 会被存为二进制乱码
+    image_id = int(image_id)
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     now = datetime.now().isoformat()
+    
     cursor.execute("SELECT id FROM evaluations WHERE image_id=? AND evaluator_id=?", (image_id, user_id))
     exists = cursor.fetchone()
+    
     data = (
         user_id,
         scores['clarity'], scores['detail_richness'], scores['color_harmony'], scores['prompt_adherence'],
@@ -245,12 +251,14 @@ def save_evaluation(image_id, user_id, scores):
         scores['overall_quality'], scores['is_usable'], scores['notes'],
         now
     )
+    
     try:
         if exists:
             sql = '''UPDATE evaluations SET 
                      evaluator_id=?, clarity=?, detail_richness=?, color_harmony=?, prompt_adherence=?,
                      perspective_check=?, asset_cleanliness=?, style_consistency=?, structural_logic=?,
-                     overall_quality=?, is_usable=?, notes=?, evaluation_time=? WHERE id=?'''
+                     overall_quality=?, is_usable=?, notes=?, evaluation_time=?
+                     WHERE id=?'''
             cursor.execute(sql, data + (exists[0],))
             msg = "🔄 更新成功"
         else:
@@ -267,17 +275,9 @@ def save_evaluation(image_id, user_id, scores):
     except Exception as e:
         st.error(f"保存失败: {e}")
         return False
-    finally: conn.close()
-
-def get_existing_score(image_id, user_id):
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        df = pd.read_sql("SELECT * FROM evaluations WHERE image_id=? AND evaluator_id=?", conn, params=(image_id, user_id))
-        if not df.empty: return df.iloc[0].to_dict()
-    except: pass
-    finally: conn.close()
-    return {}
-
+    finally:
+        conn.close()
+        
 # ===== 主程序 =====
 def main():
     # 0. 启动检查
@@ -438,5 +438,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

@@ -37,7 +37,7 @@ OUTPUT_DIR = os.path.join(DATASET_ROOT, "images")
 METADATA_DIR = os.path.join(DATASET_ROOT, "metadata")
 DB_PATH = os.path.join(METADATA_DIR, "image_index.db")
 # 📍 指定本地 Prompt 文件路径
-LOCAL_PROMPT_JSON = os.path.join("D:\游戏图像脚本\", "final_prompts_translated.json")
+LOCAL_PROMPT_JSON = os.path.join("D:\游戏图像脚本", "final_prompts_translated.json")
 
 for p in [OUTPUT_DIR, METADATA_DIR]:
     os.makedirs(p, exist_ok=True)
@@ -377,5 +377,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

@@ -318,7 +318,9 @@ def main():
             conn = sqlite3.connect(DB_PATH)
             sql = '''
             SELECT 
-                e.id as ID, e.evaluator_id as 评分员, i.model_id as 模型,
+                e.id as ID, e.image_id as [关键_图片内部ID], 
+                e.evaluator_id as 评分员,
+                i.id as [对照_实际图片ID], e.evaluator_id as 评分员, i.model_id as 模型,
                 i.filepath as 路径, i.prompt_text as Prompt,
                 e.prompt_adherence as Prompt匹配度, e.overall_quality as 整体评分,
                 e.clarity as 清晰度, e.detail_richness as 细节, e.color_harmony as 色彩,
@@ -426,3 +428,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

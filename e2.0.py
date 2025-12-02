@@ -9,6 +9,7 @@ import cloudinary
 import cloudinary.api
 from cloudinary.utils import cloudinary_url
 from cloudinary.exceptions import NotFound
+import time
 
 # 🔥 这一行必须放在所有 st. 命令的最前面！
 st.set_page_config(
@@ -192,10 +193,12 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
             
             while True:
                 try:
+                    time.sleep(0.5) 
+
                     resources = cloudinary.api.resources(
                         type="upload",
                         folders=folder_path,
-                        max_results=500,
+                        max_results=500, # 建议改为 100 或 200，单次获取太大量容易超时
                         next_cursor=next_cursor,
                         resource_type="image"
                     )
@@ -290,7 +293,16 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                     if not next_cursor:
                         break
                         
+
+                except cloudinary.exceptions.RateLimited as e:
+                    st.error(f"❌ 速率限制已达上限 (Error 420)。")
+                    st.warning("⚠️ Cloudinary 每小时限制 500 次管理请求。请等待一小时后再尝试加载剩余数据。")
+                    st.info("💡 已加载的数据可以正常评分，不受影响。")
+                    return loaded_count # 立即返回已加载的数量，保存现有进度
                 except Exception as e:
+                    if "420" in str(e): # 有些版本的库可能抛出通用异常
+                        st.error(f"❌ 速率限制已达上限。请稍后再试。")
+                        return loaded_count
                     st.error(f"❌ 处理文件夹 {folder_path} 时出错: {str(e)}")
                     break
             
@@ -337,83 +349,23 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
 # ===== 生成Cloudinary图片可访问URL =====
 def get_cloud_image_url(filepath: str, model_id: str) -> str:
     """
-    根据filepath和model_id生成正确的Cloudinary URL
+    纯本地生成URL，不调用API，避免消耗额度
     """
     try:
-        # 🔥 关键修改：修正public_id的构建方式
-        # 如果filepath已经是完整路径，直接使用；否则构建完整路径
-        if filepath.startswith("ai-rating-images/"):
-            public_id = filepath
-        else:
-            # 从filepath中提取基本文件名
-            # filepath可能是：conc_pike_07_sd4
-            # 需要构建为：ai-rating-images/dalle3/conc_pike_07_sd4_turbo_3_5cgkm
-            # 但是我们不知道随机字符部分
-            
-            # 尝试从Cloudinary搜索这个文件
-            # 首先，获取该文件夹下的所有文件
-            search_prefix = f"ai-rating-images/{model_id}/"
-            
-            try:
-                # 搜索包含基本文件名的资源
-                resources = cloudinary.api.resources(
-                    type="upload",
-                    prefix=search_prefix,
-                    max_results=100
-                )
-                
-                # 查找匹配的文件
-                for res in resources.get('resources', []):
-                    res_name = res['public_id'].split('/')[-1]
-                    # 检查是否包含基本文件名
-                    if filepath in res_name:
-                        public_id = res['public_id']
-                        break
-                else:
-                    # 如果没找到，使用原始filepath尝试
-                    public_id = f"ai-rating-images/{model_id}/{filepath}"
-                    
-            except Exception:
-                public_id = f"ai-rating-images/{model_id}/{filepath}"
-        
-        # 先校验资源是否存在
-        try:
-            cloudinary.api.resource(public_id, resource_type="image")
-        except NotFound:
-            st.warning(f"⚠️ 尝试的Public ID不存在: {public_id}")
-            # 尝试其他可能的格式
-            # 可能是filepath缺少随机字符部分
-            # 尝试搜索最接近的文件
-            resources = cloudinary.api.resources(
-                type="upload",
-                prefix=f"ai-rating-images/{model_id}/",
-                max_results=10
-            )
-            
-            if resources.get('resources'):
-                # 使用第一个找到的文件作为测试
-                public_id = resources['resources'][0]['public_id']
-                st.info(f"🔍 使用替代文件: {public_id}")
-            else:
-                return "https://via.placeholder.com/800x800?text=Image+Not+Found"
-        
-        # 生成优化后的URL：限制尺寸、自动质量压缩
+        # 如果 filepath 已经是完整的 public_id (我们在 load 阶段已经确保了这点)
+        # 直接使用它生成 URL
         url, _ = cloudinary_url(
-            public_id,
-            resource_type="image",
+            filepath,
             width=800,
             height=800,
             crop="limit",
             quality="auto:good",
-            format="auto",  # 自动检测格式，因为文件没有扩展名
+            format="auto",
             secure=True
         )
         return url
-        
     except Exception as e:
-        st.error(f"❌ 加载图片失败: {str(e)}")
-        return "https://via.placeholder.com/800x800?text=Error+Loading+Image"
-
+        return f"https://via.placeholder.com/800x800?text=Error+{str(e)}"
 # ===== 评分操作函数 =====
 def get_evaluation(image_id, evaluator_id):
     """获取指定图片和评分员的已有评分"""
@@ -816,10 +768,14 @@ def main_rating_page():
                 st.image(img_url, use_container_width=True)
                 
                 # 添加调试信息
-                with st.expander("🔍 调试信息", expanded=False):
-                    st.write(f"**数据库中的filepath:** `{row['filepath']}`")
-                    st.write(f"**模型ID:** `{row['model_id']}`")
-                    st.write(f"**图片URL:** `{img_url}`")
+                # ... 在 with st.expander(...) 内部 ...
+                # ✅ 修复：使用 checkbox 替代嵌套的 expander
+                if st.checkbox("🔍 显示调试信息", key=f"debug_btn_{row['id']}"):
+                    st.code(f"filepath: {row['filepath']}\nModel: {row['model_id']}\nURL: {img_url}")
+                # with st.expander("🔍 调试信息", expanded=False):
+                #     st.write(f"**数据库中的filepath:** `{row['filepath']}`")
+                #     st.write(f"**模型ID:** `{row['model_id']}`")
+                #     st.write(f"**图片URL:** `{img_url}`")
                 
                 st.caption(f"**Prompt:** {row['prompt_text'][:100]}..." if len(row['prompt_text'])>100 else f"**Prompt:** {row['prompt_text']}")
                 st.caption(f"**类型:** {row['type']} | **风格:** {row['style']}")
@@ -1097,3 +1053,4 @@ def quick_diagnostic():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+

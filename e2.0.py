@@ -1,21 +1,21 @@
 import streamlit as st
 import pandas as pd
-import json
 import os
-from pathlib import Path
-from datetime import datetime
 import sqlite3
 import cloudinary
 import cloudinary.api
 from cloudinary.utils import cloudinary_url
-from cloudinary.exceptions import NotFound
+from datetime import datetime
 import time
+import uuid
+import socket
 
-# 🔥 这一行必须放在所有 st. 命令的最前面！
+# 🔥 1. 页面配置
 st.set_page_config(
-    page_title="AI游戏图像质量评价系统",
+    page_title="AI游戏美术评分系统 Pro",
     page_icon="🎮",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ===== Cloudinary 配置 =====
@@ -25,63 +25,57 @@ cloudinary.config(
     api_secret="YIY48Z9VOM1zHfPWZvFKlHpyXzk",
     secure=True
 )
-
 CLOUDINARY_ROOT_FOLDER = "ai-rating-images"
 
 # ===== 路径配置 =====
-def ensure_writable_dir(path):
-    try:
-        os.makedirs(path, exist_ok=True)
-        return True
-    except Exception as e:
-        st.error(f"❌ 目录不可写: {path} | 错误: {str(e)}")
-        return False
-
-# 适配本地/云端环境路径
 if 'STREAMLIT_SHARING' in os.environ or 'STREAMLIT_SERVER' in os.environ:
     DATASET_ROOT = os.path.join(os.getcwd(), "ai_dataset_project")
 else:
-    # ⚠️ 注意：这里硬编码了 D 盘路径，请确认你是否真的想用这个路径
     DATASET_ROOT = "D:/ai_dataset_project"
 
 OUTPUT_DIR = os.path.join(DATASET_ROOT, "images")
 METADATA_DIR = os.path.join(DATASET_ROOT, "metadata")
-EVALUATION_DIR = os.path.join(DATASET_ROOT, "evaluations")
 DB_PATH = os.path.join(METADATA_DIR, "image_index.db")
 
-for dir_path in [OUTPUT_DIR, METADATA_DIR, EVALUATION_DIR]:
-    ensure_writable_dir(dir_path)
+for p in [OUTPUT_DIR, METADATA_DIR]:
+    os.makedirs(p, exist_ok=True)
 
-# ===== 数据库操作 =====
+# ===== 🧠 用户ID管理 =====
+def get_user_id():
+    query_params = st.query_params
+    if "user" in query_params:
+        return query_params["user"]
+    if "user_id" not in st.session_state:
+        new_id = f"user_{uuid.uuid4().hex[:6]}"
+        st.session_state.user_id = new_id
+        st.query_params["user"] = new_id
+        return new_id
+    return st.session_state.user_id
+
+# ===== 💾 数据库结构 =====
 def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # 图片表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prompt_id TEXT,
-            model_id TEXT,
-            image_number INTEGER,
-            filepath TEXT UNIQUE,
-            prompt_text TEXT,
-            type TEXT,
-            style TEXT,
-            model_name TEXT,
-            quality_tier TEXT,
-            generation_time TEXT
+            prompt_id TEXT, model_id TEXT, image_number INTEGER, filepath TEXT UNIQUE,
+            prompt_text TEXT, type TEXT, style TEXT, model_name TEXT, quality_tier TEXT, generation_time TEXT
         )
     ''')
+
+    # 评分表 (包含游戏专业指标)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS evaluations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             image_id INTEGER,
             evaluator_id TEXT,
-            evaluator_name TEXT,
-            clarity INTEGER, detail_richness INTEGER, color_accuracy INTEGER, lighting_quality INTEGER, composition INTEGER,
-            prompt_match INTEGER, style_consistency INTEGER, subject_completeness INTEGER,
-            game_usability INTEGER, needs_fix TEXT, direct_use TEXT,
-            major_defects TEXT, minor_issues TEXT,
-            overall_quality INTEGER, grade TEXT, notes TEXT,
+            clarity INTEGER, detail_richness INTEGER, color_harmony INTEGER,
+            perspective_check INTEGER, asset_cleanliness INTEGER, 
+            style_consistency INTEGER, structural_logic INTEGER,
+            overall_quality INTEGER, is_usable TEXT, notes TEXT,
             evaluation_time TEXT,
             FOREIGN KEY (image_id) REFERENCES images(id)
         )
@@ -89,66 +83,58 @@ def init_database():
     conn.commit()
     conn.close()
 
+# ===== ☁️ 自动从 Cloudinary 拉取数据 (复活的函数) =====
 def load_images_from_cloudinary_to_db(force_refresh=False):
+    """当数据库为空时，自动从Cloudinary重新拉取列表"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    st.info(f"🔍 开始从 Cloudinary 拉取资源...")
+    # 检查是否真的需要加载
+    if not force_refresh:
+        cursor.execute("SELECT COUNT(*) FROM images")
+        if cursor.fetchone()[0] > 0:
+            conn.close()
+            return
 
+    placeholder = st.empty()
+    placeholder.info(f"🔍 数据库为空，正在从 Cloudinary 恢复数据，请稍候...")
+    
     if force_refresh:
         cursor.execute("DELETE FROM images")
         conn.commit()
 
     try:
-        # 获取子文件夹
         subfolders_result = cloudinary.api.subfolders(CLOUDINARY_ROOT_FOLDER)
         subfolders = subfolders_result.get('folders', [])
         
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        loaded_count = 0
+        total_loaded = 0
         
-        for folder_idx, folder in enumerate(subfolders):
-            folder_path = folder['path'] # 例如: ai-rating-images/dalle3
+        # 创建进度条
+        progress_bar = st.progress(0)
+        
+        for idx, folder in enumerate(subfolders):
+            folder_path = folder['path']
             model_id = folder_path.split('/')[-1]
-            
-            # 检查该文件夹是否已有数据（避免重复加载消耗额度）
-            cursor.execute("SELECT COUNT(*) FROM images WHERE model_id = ?", (model_id,))
-            existing_count = cursor.fetchone()[0]
-            if existing_count > 0 and not force_refresh:
-                st.info(f"⏭️ 跳过 {model_id} (数据库已有 {existing_count} 张)")
-                continue
-
-            status_text.text(f"📁 正在处理: {folder_path}...")
-            
             next_cursor = None
             
             while True:
                 try:
-                    time.sleep(0.5) # 限速保护
-                    
+                    time.sleep(0.2) #稍微防一下限流
                     resources = cloudinary.api.resources(
-                        type="upload",
-                        folders=folder_path, # 指定文件夹
-                        max_results=100,
-                        next_cursor=next_cursor,
-                        resource_type="image"
+                        type="upload", folders=folder_path, max_results=100,
+                        next_cursor=next_cursor, resource_type="image"
                     )
-                    
-                    batch_resources = resources.get("resources", [])
-                    if not batch_resources: break
+                    batch = resources.get("resources", [])
+                    if not batch: break
                         
-                    for res in batch_resources:
-                        # ✅ 修正的核心：直接使用 res['public_id']，它已经包含了完整路径
-                        full_public_id = res["public_id"] 
-                        
-                        # 解析文件名逻辑
+                    for res in batch:
+                        full_public_id = res["public_id"]
                         actual_filename = full_public_id.split('/')[-1]
-                        parts = actual_filename.split('_')
                         
-                        # 简单的解析逻辑
+                        # 简单的ID解析
                         prompt_id = actual_filename
                         image_number = 1
+                        parts = actual_filename.split('_')
                         if len(parts) > 1 and parts[-1].isdigit():
                             image_number = int(parts[-1])
                             prompt_id = "_".join(parts[:-1])
@@ -169,7 +155,7 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                             context.get("quality_tier", "medium"),
                             res.get("created_at", datetime.now().isoformat())
                         ))
-                        loaded_count += 1
+                        total_loaded += 1
                     
                     conn.commit()
                     next_cursor = resources.get("next_cursor")
@@ -177,122 +163,209 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                     
                 except Exception as e:
                     if "420" in str(e):
-                        st.warning("⚠️ API速率限制已达上限。已保存当前进度。")
+                        st.warning("⚠️ API速率限制，已保存现有进度。")
                         conn.close()
-                        return loaded_count
-                    st.error(f"❌ 错误: {str(e)}")
+                        placeholder.empty()
+                        return
                     break
             
-            progress_bar.progress((folder_idx + 1) / len(subfolders))
+            progress_bar.progress((idx + 1) / len(subfolders))
             
     except Exception as e:
-        st.error(f"❌ 严重错误: {str(e)}")
+        st.error(f"加载出错: {e}")
     
     conn.close()
-    return loaded_count
+    placeholder.success(f"✅ 数据恢复完成！共加载 {total_loaded} 张图片")
+    time.sleep(1)
+    placeholder.empty()
+    st.rerun() # 加载完自动刷新页面
 
+# ===== 生成图片URL =====
 def get_cloud_image_url(filepath: str) -> str:
-    """生成图片URL"""
     try:
         url, _ = cloudinary_url(
-            filepath,
-            width=800,
-            crop="limit",
-            quality="auto",
-            fetch_format="auto", # 自动适配格式
-            secure=True
+            filepath, width=800, crop="limit", quality="auto",
+            fetch_format="auto", secure=True
         )
         return url
-    except Exception:
-        return "https://via.placeholder.com/800x800?text=Error"
+    except:
+        return "https://via.placeholder.com/800x800?text=URL+Error"
 
-# ===== 评分保存逻辑 =====
-def save_evaluation_db(image_id, evaluator_id, evaluator_name, scores):
+# ===== 保存评分 =====
+def save_evaluation(image_id, user_id, scores):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # ... (简化的保存逻辑，与原版相同) ...
-    # 这里为了代码简洁省略了具体的 INSERT/UPDATE 语句，请使用你原来的 save_evaluation 函数内容
-    # 但请确保表名和字段名一致
+    now = datetime.now().isoformat()
+    
+    cursor.execute("SELECT id FROM evaluations WHERE image_id=? AND evaluator_id=?", (image_id, user_id))
+    exists = cursor.fetchone()
+    
+    data = (
+        user_id,
+        scores['clarity'], scores['detail_richness'], scores['color_harmony'],
+        scores['perspective_check'], scores['asset_cleanliness'], 
+        scores['style_consistency'], scores['structural_logic'],
+        scores['overall_quality'], scores['is_usable'], scores['notes'],
+        now
+    )
+    
     try:
-        # 简单实现，确保演示代码可运行
-        current_time = datetime.now().isoformat()
-        cursor.execute("SELECT id FROM evaluations WHERE image_id=? AND evaluator_id=?", (image_id, evaluator_id))
-        exists = cursor.fetchone()
-        
         if exists:
-            cursor.execute("UPDATE evaluations SET overall_quality=?, notes=?, evaluation_time=? WHERE id=?", 
-                          (scores['overall_quality'], scores['notes'], current_time, exists[0]))
+            sql = '''UPDATE evaluations SET 
+                     evaluator_id=?, clarity=?, detail_richness=?, color_harmony=?,
+                     perspective_check=?, asset_cleanliness=?, style_consistency=?, structural_logic=?,
+                     overall_quality=?, is_usable=?, notes=?, evaluation_time=?
+                     WHERE id=?'''
+            cursor.execute(sql, data + (exists[0],))
+            msg = "🔄 评分已更新"
         else:
-            cursor.execute("INSERT INTO evaluations (image_id, evaluator_id, overall_quality, notes, evaluation_time) VALUES (?, ?, ?, ?, ?)",
-                          (image_id, evaluator_id, scores['overall_quality'], scores['notes'], current_time))
+            sql = '''INSERT INTO evaluations (
+                     evaluator_id, clarity, detail_richness, color_harmony,
+                     perspective_check, asset_cleanliness, style_consistency, structural_logic,
+                     overall_quality, is_usable, notes, evaluation_time, image_id
+                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)'''
+            cursor.execute(sql, data + (image_id,))
+            msg = "✅ 评分已保存"
         conn.commit()
-        st.success("已保存")
+        st.toast(msg)
+        return True
     except Exception as e:
         st.error(f"保存失败: {e}")
-    conn.close()
+        return False
+    finally:
+        conn.close()
 
-# ===== 主界面 =====
+# ===== 获取已有评分 =====
+def get_existing_score(image_id, user_id):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df = pd.read_sql("SELECT * FROM evaluations WHERE image_id=? AND evaluator_id=?", 
+                         conn, params=(image_id, user_id))
+        if not df.empty:
+            return df.iloc[0].to_dict()
+    except:
+        pass
+    finally:
+        conn.close()
+    return {}
+
+# ===== 主程序 =====
 def main():
-    # 1. 显示当前数据库路径，防止找错文件
-    st.sidebar.warning(f"📂 当前数据库路径:\n{DB_PATH}")
-    
-    # 2. 强制重置按钮
-    if st.sidebar.button("⚠️ 强制清空并重新获取数据", type="primary"):
-        init_database()
-        count = load_images_from_cloudinary_to_db(force_refresh=True)
-        st.sidebar.success(f"已重新加载 {count} 条数据！")
-        time.sleep(1)
-        st.rerun()
-
-    # 初始化
+    # 1. 确保数据库存在
     if not os.path.exists(DB_PATH):
         init_database()
-        load_images_from_cloudinary_to_db()
+        
+    # 2. 🔥 关键：每次运行都检查数据库是否为空，空则自动拉取
+    load_images_from_cloudinary_to_db(force_refresh=False)
 
-    # 3. 读取数据
+    # 3. 获取用户 ID
+    current_user = get_user_id()
+
+    # 4. 侧边栏
+    with st.sidebar:
+        st.title("👤 评分系统 Pro")
+        st.info(f"ID: **{current_user}**")
+        st.caption("不同设备访问会自动分配不同ID")
+        
+        st.divider()
+        if st.button("🔄 刷新/重新拉取数据"):
+            init_database()
+            load_images_from_cloudinary_to_db(force_refresh=True)
+
+    # 5. 读取数据
     conn = sqlite3.connect(DB_PATH)
     try:
         images_df = pd.read_sql("SELECT * FROM images", conn)
+        # 兼容性处理：如果 evaluations 表不存在，不报错
+        try:
+            my_evals = pd.read_sql("SELECT COUNT(*) as cnt FROM evaluations WHERE evaluator_id=?", 
+                               conn, params=(current_user,)).iloc[0]['cnt']
+        except:
+            my_evals = 0
     except:
-        init_database()
         images_df = pd.DataFrame()
+        my_evals = 0
     conn.close()
 
-    st.title(f"🎮 AI游戏图像评价 (共 {len(images_df)} 张)")
-
-    if len(images_df) == 0:
-        st.warning("暂无数据，请点击左侧'强制清空并重新获取数据'按钮")
+    if images_df.empty:
+        st.warning("正在初始化数据，请稍候...")
         return
 
-    # 分页
-    limit = 5
-    total_pages = max(1, (len(images_df)-1)//limit + 1)
-    page = st.number_input("页码", 1, total_pages, 1)
-    
-    start = (page-1) * limit
-    current_images = images_df.iloc[start : start+limit]
+    # 6. 顶部统计
+    col1, col2, col3 = st.columns(3)
+    col1.metric("总图片", len(images_df))
+    col2.metric("我的进度", f"{my_evals}")
+    col3.metric("完成率", f"{my_evals/len(images_df)*100:.1f}%")
+    st.progress(my_evals/len(images_df) if len(images_df)>0 else 0)
 
-    for _, row in current_images.iterrows():
-        with st.expander(f"🖼️ {row['filepath']} ({row['model_id']})", expanded=True):
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                # 显示图片
-                url = get_cloud_image_url(row['filepath'])
-                st.image(url)
+    # 7. 分页控制
+    if 'page_number' not in st.session_state:
+        st.session_state.page_number = 1
+        
+    total_pages = len(images_df)
+    col_prev, col_page, col_next = st.columns([1, 2, 1])
+    with col_prev:
+        if st.button("⬅️ 上一张") and st.session_state.page_number > 1:
+            st.session_state.page_number -= 1
+            st.rerun()
+    with col_page:
+        st.session_state.page_number = st.number_input("页码", 1, total_pages, st.session_state.page_number, label_visibility="collapsed")
+    with col_next:
+        if st.button("下一张 ➡️") and st.session_state.page_number < total_pages:
+            st.session_state.page_number += 1
+            st.rerun()
+
+    # 8. 内容展示区
+    idx = st.session_state.page_number - 1
+    if idx < len(images_df):
+        row = images_df.iloc[idx]
+        existing = get_existing_score(row['id'], current_user)
+
+        st.markdown("---")
+        col_img, col_form = st.columns([1.2, 1])
+        
+        with col_img:
+            st.subheader(f"🖼️ {row['model_id']} ({row['image_number']})")
+            st.image(get_cloud_image_url(row['filepath']), use_container_width=True)
+            with st.expander("调试信息"):
+                st.code(row['filepath'])
                 
-                # 调试信息
-                if st.checkbox("Debug URL", key=f"d_{row['id']}"):
-                    st.code(url)
-            
-            with col2:
-                st.write(f"**Model Folder:** {row['model_id']}")
-                st.write(f"**Filename:** {row['filepath'].split('/')[-1]}")
-                st.info("如果这里显示的 Filename 包含 'sdxl' 但 Model Folder 是 'dalle3'，说明文件被传到了 dalle3 文件夹中。")
+        with col_form:
+            with st.form(key=f"form_{row['id']}"):
+                st.markdown("#### 🛠️ 游戏工业标准")
+                c1, c2 = st.columns(2)
+                with c1:
+                    perspective = st.slider("透视准确性", 1, 5, existing.get('perspective_check', 3))
+                    asset_clean = st.slider("资产干净度", 1, 5, existing.get('asset_cleanliness', 3))
+                with c2:
+                    struct_logic = st.slider("结构合理性", 1, 5, existing.get('structural_logic', 3))
+                    style_const = st.slider("风格一致性", 1, 5, existing.get('style_consistency', 3))
+
+                st.markdown("#### 🎨 基础美术质量")
+                c3, c4 = st.columns(2)
+                with c3:
+                    clarity = st.slider("清晰度", 1, 5, existing.get('clarity', 3))
+                    detail = st.slider("细节丰富度", 1, 5, existing.get('detail_richness', 3))
+                with c4:
+                    color = st.slider("色彩和谐度", 1, 5, existing.get('color_harmony', 3))
+
+                st.markdown("---")
+                overall = st.slider("⭐ 整体评分", 1, 5, existing.get('overall_quality', 3))
+                is_usable = st.radio("🎮 是否可用？", ["是", "否", "需微调"], 
+                                   index=["是", "否", "需微调"].index(existing.get('is_usable', '否')), horizontal=True)
+                notes = st.text_area("备注", existing.get('notes', ''))
                 
-                rating = st.slider("评分", 1, 5, 3, key=f"r_{row['id']}")
-                notes = st.text_input("备注", key=f"n_{row['id']}")
-                if st.button("保存", key=f"s_{row['id']}"):
-                    save_evaluation_db(row['id'], "eval_001", "User", {"overall_quality": rating, "notes": notes})
+                if st.form_submit_button("💾 保存并下一张", type="primary", use_container_width=True):
+                    scores = {
+                        "clarity": clarity, "detail_richness": detail, "color_harmony": color,
+                        "perspective_check": perspective, "asset_cleanliness": asset_clean,
+                        "structural_logic": struct_logic, "style_consistency": style_const,
+                        "overall_quality": overall, "is_usable": is_usable, "notes": notes
+                    }
+                    if save_evaluation(row['id'], current_user, scores):
+                        if st.session_state.page_number < total_pages:
+                            st.session_state.page_number += 1
+                            st.rerun()
 
 if __name__ == "__main__":
     main()

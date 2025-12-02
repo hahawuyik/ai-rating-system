@@ -211,37 +211,70 @@ def load_images_from_cloudinary_to_db(force_refresh=False):
                         break
                         
                     for res in batch_resources:
-                        filename = res["public_id"]  # 注意：这里只返回文件名，不包含路径
+                        # Cloudinary返回的public_id已经包含了完整路径
+                        # 例如: ai-rating-images/dalle3/conc_pixe_07_sdxl_turbo
+                        full_public_id = res["public_id"]  
                         
-                        # 🔥 关键：使用完整的public_id作为filepath
-                        full_public_id = f"{folder_path}/{filename}"
+                        # 获取纯文件名用于解析元数据 (去掉路径)
+                        # 例如: conc_pixe_07_sdxl_turbo
+                        actual_filename = full_public_id.split('/')[-1]
                         
-                        # 解析文件名：格式为 char_fant_01_dalle3_1_xxxx
-                        parts = filename.split('_')
+                        # 解析文件名：使用纯文件名进行分割
+                        parts = actual_filename.split('_')
                         
                         # 确定prompt_id和image_number
                         if len(parts) >= 5:
                             # 找到模型名在文件名中的位置
                             for i, part in enumerate(parts):
                                 if part in [model_id, model_id.replace('_', '')]:
-                                    # 模型名之前的部分作为prompt_id
                                     prompt_id = '_'.join(parts[:i])
-                                    # 模型名之后的数字作为image_number
                                     if i+1 < len(parts) and parts[i+1].isdigit():
                                         image_number = int(parts[i+1])
                                     else:
                                         image_number = 1
                                     break
                             else:
-                                # 如果没找到模型名，使用简化逻辑
-                                prompt_id = '_'.join(parts[:-2]) if len(parts) >= 3 else filename
+                                prompt_id = '_'.join(parts[:-2]) if len(parts) >= 3 else actual_filename
                                 image_number = int(parts[-2]) if len(parts)>=2 and parts[-2].isdigit() else 1
                         else:
-                            prompt_id = '_'.join(parts[:-1]) if len(parts) > 1 else filename
+                            prompt_id = '_'.join(parts[:-1]) if len(parts) > 1 else actual_filename
                             image_number = int(parts[-1]) if parts[-1].isdigit() else 1
                         
                         # 读取自定义元数据
                         context = res.get("context", {}).get("custom", {})
+                        
+                        # # ... (后续代码不用动)
+                        # filename = res["public_id"]  # 注意：这里只返回文件名，不包含路径
+                        
+                        # # 🔥 关键：使用完整的public_id作为filepath
+                        # full_public_id = f"{folder_path}/{filename}"
+                        
+                        # # 解析文件名：格式为 char_fant_01_dalle3_1_xxxx
+                        # parts = filename.split('_')
+                        
+                        # # 确定prompt_id和image_number
+                        # if len(parts) >= 5:
+                        #     # 找到模型名在文件名中的位置
+                        #     for i, part in enumerate(parts):
+                        #         if part in [model_id, model_id.replace('_', '')]:
+                        #             # 模型名之前的部分作为prompt_id
+                        #             prompt_id = '_'.join(parts[:i])
+                        #             # 模型名之后的数字作为image_number
+                        #             if i+1 < len(parts) and parts[i+1].isdigit():
+                        #                 image_number = int(parts[i+1])
+                        #             else:
+                        #                 image_number = 1
+                        #             break
+                        #     else:
+                        #         # 如果没找到模型名，使用简化逻辑
+                        #         prompt_id = '_'.join(parts[:-2]) if len(parts) >= 3 else filename
+                        #         image_number = int(parts[-2]) if len(parts)>=2 and parts[-2].isdigit() else 1
+                        # else:
+                        #     prompt_id = '_'.join(parts[:-1]) if len(parts) > 1 else filename
+                        #     image_number = int(parts[-1]) if parts[-1].isdigit() else 1
+                        
+                        # # 读取自定义元数据
+                        # context = res.get("context", {}).get("custom", {})
                         
                         # 尝试从同名的JSON文件读取更多元数据
                         json_public_id = full_public_id + ".info.json"
@@ -1053,4 +1086,5 @@ def quick_diagnostic():
 # ===== 主入口 =====
 if __name__ == "__main__":
     main_rating_page()
+
 

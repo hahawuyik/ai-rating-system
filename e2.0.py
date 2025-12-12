@@ -12,7 +12,7 @@ import json
 
 # 🔥 1. 页面配置
 st.set_page_config(
-    page_title="AI游戏美术评分系统 Final",
+    page_title="AI游戏美术评分系统 (简化版)",
     page_icon="🎮",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -49,10 +49,12 @@ def get_user_id():
         return new_id
     return st.session_state.user_id
 
-# ===== 💾 数据库结构 =====
+# ===== 💾 数据库结构 (已修改为3个维度) =====
 def init_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
+    # 图片表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,21 +62,23 @@ def init_database():
             prompt_text TEXT, type TEXT, style TEXT, model_name TEXT, quality_tier TEXT, generation_time TEXT
         )
     ''')
+    
+    # 评分表 (3个核心维度)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS evaluations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            image_id INTEGER, evaluator_id TEXT,
-            clarity INTEGER, detail_richness INTEGER, color_harmony INTEGER, prompt_adherence INTEGER,
-            perspective_check INTEGER, asset_cleanliness INTEGER, style_consistency INTEGER, structural_logic INTEGER,
-            overall_quality INTEGER, is_usable TEXT, notes TEXT, evaluation_time TEXT,
+            image_id INTEGER, 
+            evaluator_id TEXT,
+            
+            technical_quality INTEGER,  -- 维度1：技术质量
+            intent_alignment INTEGER,   -- 维度2：意图对齐
+            game_usability INTEGER,     -- 维度3：开发可用性
+            
+            notes TEXT,                 -- 备注
+            evaluation_time TEXT,
             FOREIGN KEY (image_id) REFERENCES images(id)
         )
     ''')
-    # 自动升级检查
-    try: cursor.execute("SELECT prompt_adherence FROM evaluations LIMIT 1")
-    except: 
-        try: cursor.execute("ALTER TABLE evaluations ADD COLUMN prompt_adherence INTEGER")
-        except: pass
     conn.commit()
     conn.close()
 
@@ -132,7 +136,7 @@ def auto_load_local_prompts():
     except: pass
     conn.close()
 
-# ===== ☁️ Cloudinary 拉取 =====
+# ===== ☁️ Cloudinary 拉取 (安全版) =====
 def load_images_from_cloudinary_to_db(force_refresh=False):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -206,36 +210,35 @@ def get_cloud_image_url(filepath: str) -> str:
         return url
     except: return "https://via.placeholder.com/800x800?text=URL+Error"
 
-# 🔥🔥🔥 核心修复：防止二进制ID错误 🔥🔥🔥
+# ===== 保存评分 (3维度版) =====
 def save_evaluation(image_id, user_id, scores):
-    image_id = int(image_id) # 强制转换为int
+    image_id = int(image_id) # 强制转int
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     now = datetime.now().isoformat()
     cursor.execute("SELECT id FROM evaluations WHERE image_id=? AND evaluator_id=?", (image_id, user_id))
     exists = cursor.fetchone()
+    
     data = (
         user_id,
-        scores['clarity'], scores['detail_richness'], scores['color_harmony'], scores['prompt_adherence'],
-        scores['perspective_check'], scores['asset_cleanliness'], 
-        scores['style_consistency'], scores['structural_logic'],
-        scores['overall_quality'], scores['is_usable'], scores['notes'],
+        scores['technical_quality'], 
+        scores['intent_alignment'], 
+        scores['game_usability'], 
+        scores['notes'],
         now
     )
     try:
         if exists:
             sql = '''UPDATE evaluations SET 
-                     evaluator_id=?, clarity=?, detail_richness=?, color_harmony=?, prompt_adherence=?,
-                     perspective_check=?, asset_cleanliness=?, style_consistency=?, structural_logic=?,
-                     overall_quality=?, is_usable=?, notes=?, evaluation_time=? WHERE id=?'''
+                     evaluator_id=?, technical_quality=?, intent_alignment=?, game_usability=?,
+                     notes=?, evaluation_time=? WHERE id=?'''
             cursor.execute(sql, data + (exists[0],))
             msg = "🔄 更新成功"
         else:
             sql = '''INSERT INTO evaluations (
-                     evaluator_id, clarity, detail_richness, color_harmony, prompt_adherence,
-                     perspective_check, asset_cleanliness, style_consistency, structural_logic,
-                     overall_quality, is_usable, notes, evaluation_time, image_id
-                     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)'''
+                     evaluator_id, technical_quality, intent_alignment, game_usability,
+                     notes, evaluation_time, image_id
+                     ) VALUES (?,?,?,?,?,?,?)'''
             cursor.execute(sql, data + (image_id,))
             msg = "✅ 保存成功"
         conn.commit()
@@ -246,7 +249,6 @@ def save_evaluation(image_id, user_id, scores):
         return False
     finally: conn.close()
 
-# ✅✅✅ 补回丢失的函数 ✅✅✅
 def get_existing_score(image_id, user_id):
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -262,8 +264,9 @@ def main():
     load_images_from_cloudinary_to_db(force_refresh=False)
     current_user = get_user_id()
 
+    # --- 侧边栏 ---
     with st.sidebar:
-        st.title("👤 评分系统 Pro")
+        st.title("👤 评分系统 (3维度版)")
         st.info(f"ID: **{current_user}**")
         st.caption("保留地址栏链接以保存进度。")
         
@@ -287,14 +290,13 @@ def main():
             conn = sqlite3.connect(DB_PATH)
             sql = '''
             SELECT 
-                e.id as 评分ID, e.image_id as [关键_图片内部ID], 
-                i.id as [对照_实际图片ID], e.evaluator_id as 评分员, i.model_id as 模型,
+                e.id as 评分ID, e.image_id as [关键_图片ID], 
+                e.evaluator_id as 评分员, i.model_id as 模型,
                 i.filepath as 路径, i.prompt_text as Prompt,
-                e.prompt_adherence as Prompt匹配度, e.overall_quality as 整体评分,
-                e.clarity as 清晰度, e.detail_richness as 细节, e.color_harmony as 色彩,
-                e.perspective_check as 透视, e.asset_cleanliness as 资产干净度,
-                e.style_consistency as 风格一致性, e.structural_logic as 结构,
-                e.is_usable as 是否可用, e.notes as 备注, e.evaluation_time as 时间
+                e.technical_quality as [D1_技术质量], 
+                e.intent_alignment as [D2_意图对齐],
+                e.game_usability as [D3_开发可用性],
+                e.notes as 备注, e.evaluation_time as 时间
             FROM evaluations e
             LEFT JOIN images i ON e.image_id = i.id
             ORDER BY e.evaluation_time DESC
@@ -310,11 +312,13 @@ def main():
         admin_pwd = st.text_input("管理员密码", type="password", key="admin_pwd")
         if admin_pwd == "123456":
             st.error("⚠️ 危险区域")
-            if st.button("🧨 工厂级重置 (清空所有数据)"):
+            st.warning("更换了评分维度，旧数据不兼容，请务必先点击下方按钮！")
+            if st.button("🧨 工厂级重置 (新评分标准专用)"):
                 factory_reset()
-                st.success("已重置！正在重新拉取数据...")
+                st.success("已重置！正在初始化新表...")
                 load_images_from_cloudinary_to_db(force_refresh=True)
 
+    # --- 主数据加载 ---
     conn = sqlite3.connect(DB_PATH)
     try:
         images_df = pd.read_sql("SELECT * FROM images", conn)
@@ -323,8 +327,9 @@ def main():
     except: images_df = pd.DataFrame(); my_evals = 0
     conn.close()
 
-    if images_df.empty: st.warning("⏳ 正在加载数据..."); return
+    if images_df.empty: st.warning("⏳ 正在初始化，请稍候..."); return
 
+    # --- 界面 ---
     col1, col2, col3 = st.columns(3)
     col1.metric("总图片", len(images_df))
     col2.metric("我的进度", f"{my_evals}")
@@ -348,6 +353,19 @@ def main():
         existing = get_existing_score(row['id'], current_user)
 
         st.markdown("---")
+        
+        # 评分标准参考 (折叠起来，需要时看)
+        with st.expander("📖 查看评分标准指南 (技术/意图/可用性)", expanded=False):
+            st.markdown("""
+            | 分数 | **技术质量 (清晰/色彩/构图)** | **意图对齐 (Prompt匹配度)** | **开发可用性 (进引擎)** |
+            | :--- | :--- | :--- | :--- |
+            | **5** | **优秀**：清晰锐利，无瑕疵 | **完美**：所有元素/风格完全一致 | **直接用**：无需修改 |
+            | **4** | **良好**：轻微模糊/偏差 | **高度**：核心正确，次要偏差 | **微调用**：简单调色/裁剪 |
+            | **3** | **一般**：明显噪点/模糊 | **大致**：风格或关键属性有误 | **中修**：需美术师重绘/修复 |
+            | **2** | **较差**：严重扭曲/失真 | **部分**：关键元素缺失/错误 | **大修**：仅作参考/素材 |
+            | **1** | **极差**：无法辨认/伪影 | **无关**：完全不匹配 | **废弃**：完全不可用 |
+            """)
+
         if row['prompt_text']: st.info(f"**📝 Prompt:**\n{row['prompt_text']}")
         else: st.warning("⚠️ 暂无 Prompt")
 
@@ -358,35 +376,34 @@ def main():
                 
         with col_form:
             with st.form(key=f"form_{row['id']}"):
-                st.markdown("#### 🎯 核心匹配度")
-                prompt_adhere = st.slider("Prompt 匹配度", 1, 5, existing.get('prompt_adherence', 3))
-                st.markdown("#### 🛠️ 游戏工业标准")
-                c1, c2 = st.columns(2)
-                with c1:
-                    style_const = st.slider("风格一致性", 1, 5, existing.get('style_consistency', 3))
-                    perspective = st.slider("透视准确性", 1, 5, existing.get('perspective_check', 3))
-                with c2:
-                    asset_clean = st.slider("资产干净度", 1, 5, existing.get('asset_cleanliness', 3))
-                    struct_logic = st.slider("结构合理性", 1, 5, existing.get('structural_logic', 3))
-                st.markdown("#### 🎨 基础美术质量")
-                c3, c4 = st.columns(2)
-                with c3:
-                    clarity = st.slider("清晰度", 1, 5, existing.get('clarity', 3))
-                    detail = st.slider("细节丰富度", 1, 5, existing.get('detail_richness', 3))
-                with c4:
-                    color = st.slider("色彩和谐度", 1, 5, existing.get('color_harmony', 3))
-                st.markdown("---")
-                overall = st.slider("⭐ 整体评分", 1, 5, existing.get('overall_quality', 3))
-                is_usable = st.radio("🎮 是否可用？", ["是", "否", "需微调"], index=["是", "否", "需微调"].index(existing.get('is_usable', '否')), horizontal=True)
+                st.subheader("📝 评分")
+                
+                # 维度 1
+                tech_q = st.slider(
+                    "维度1：技术质量 (Technical Quality)", 1, 5, existing.get('technical_quality', 3),
+                    help="5分：清晰锐利无瑕疵 | 3分：明显噪点模糊 | 1分：无法辨认"
+                )
+                
+                # 维度 2
+                intent_a = st.slider(
+                    "维度2：意图对齐 (Intent Alignment)", 1, 5, existing.get('intent_alignment', 3),
+                    help="5分：完美符合提示词 | 3分：风格/关键属性有误 | 1分：完全无关"
+                )
+                
+                # 维度 3
+                game_u = st.slider(
+                    "维度3：开发可用性 (Game Usability)", 1, 5, existing.get('game_usability', 3),
+                    help="5分：直接进引擎 | 3分：需美术师重绘 | 1分：完全不可用"
+                )
+                
                 notes = st.text_area("备注", existing.get('notes', ''))
                 
                 if st.form_submit_button("💾 保存并下一张", type="primary", use_container_width=True):
                     scores = {
-                        "clarity": clarity, "detail_richness": detail, "color_harmony": color,
-                        "prompt_adherence": prompt_adhere, 
-                        "perspective_check": perspective, "asset_cleanliness": asset_clean,
-                        "structural_logic": struct_logic, "style_consistency": style_const,
-                        "overall_quality": overall, "is_usable": is_usable, "notes": notes
+                        "technical_quality": tech_q,
+                        "intent_alignment": intent_a,
+                        "game_usability": game_u,
+                        "notes": notes
                     }
                     if save_evaluation(row['id'], current_user, scores):
                         if st.session_state.page_number < total_pages: st.session_state.page_number += 1; st.rerun()

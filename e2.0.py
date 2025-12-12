@@ -406,8 +406,10 @@ def main():
                         "notes": notes
                     }
                     if save_evaluation(row['id'], current_user, scores):
+                        time.sleep(0.5)
                         if st.session_state.page_number < total_pages: st.session_state.page_number += 1; st.rerun()
 
 if __name__ == "__main__":
     main()
+
 

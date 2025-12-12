@@ -12,7 +12,7 @@ import json
 
 # 🔥 1. 页面配置
 st.set_page_config(
-    page_title="AI游戏美术评分系统 (简化版)",
+    page_title="AI游戏美术评分系统",
     page_icon="🎮",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -266,7 +266,7 @@ def main():
 
     # --- 侧边栏 ---
     with st.sidebar:
-        st.title("👤 评分系统 (3维度版)")
+        st.title("👤 评分系统 ")
         st.info(f"ID: **{current_user}**")
         st.caption("保留地址栏链接以保存进度。")
         
@@ -410,3 +410,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

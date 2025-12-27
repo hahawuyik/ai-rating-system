@@ -102,14 +102,29 @@ def save_to_gsheets(new_data_dict):
         st.warning("可能是 API 配额限制或网络问题，请稍后重试。")
         return False
 
-# ===== 🖼️ 加载图片列表 (从本地 JSON) =====
+# ===== 🖼️ 加载图片列表 (智能匹配版) =====
+# 记得在文件开头确保引入了: import os, json, streamlit as st
+
+# 地图文件路径 (必须在根目录)
+LOCAL_MAP_JSON = "cloudinary_image_map.json"
+
 @st.cache_data
 def load_images_from_json():
     """
-    不再调用 Cloudinary API，直接读取本地 JSON 文件作为图片列表。
-    这是最稳定、最快、最省额度的方法。
+    读取本地 Prompt JSON，并利用 Map JSON 修正真实的 Cloudinary ID
     """
+    # 1. 尝试加载地图
+    id_map = {}
+    if os.path.exists(LOCAL_MAP_JSON):
+        with open(LOCAL_MAP_JSON, 'r', encoding='utf-8') as f:
+            id_map = json.load(f)
+    else:
+        # 如果找不到地图，会在网页顶部提示，方便调试
+        st.warning(f"⚠️ 警告：未找到地图文件 {LOCAL_MAP_JSON}，图片可能无法显示。请确保文件已上传到 GitHub。")
+
+    # 2. 读取 Prompt 清单
     if not os.path.exists(LOCAL_PROMPT_JSON):
+        st.error("❌ 找不到 Prompts 文件，请在侧边栏上传。")
         return []
     
     try:
@@ -117,30 +132,50 @@ def load_images_from_json():
             data = json.load(f)
         
         image_list = []
-        # 将字典转换为列表格式
         for filename, prompt in data.items():
-            # 简单的模型解析逻辑 (基于文件名规则)
-            model = "unknown"
-            if "dalle3" in filename: model = "dalle3"
-            elif "sdxl" in filename: model = "sdxl_turbo"
-            elif "dreamshaper" in filename: model = "dreamshaper"
-            elif "sd15" in filename: model = "sd15"
+            # filename 例如: char_anim_01_dalle3_1_a9elfb
             
-            # 构建完整的 Cloudinary public_id
-            # 假设结构是: ai-rating-images/{model}/{filename}
-            # 如果之前的 filename 已经是完整路径则不需要拼
-            full_path = f"ai-rating-images/{model}/{filename}" if "/" not in filename else filename
+            # --- 🔍 智能匹配逻辑 ---
+            real_filepath = None
             
+            # 尝试 1: 直接匹配 (以防万一)
+            if filename in id_map:
+                real_filepath = id_map[filename]
+                
+            # 尝试 2: 去掉后缀匹配 (这是解决你问题的关键！)
+            # char_anim_01_dalle3_1_a9elfb -> char_anim_01_dalle3_1
+            if not real_filepath and "_" in filename:
+                clean_key = filename.rsplit("_", 1)[0]
+                if clean_key in id_map:
+                    real_filepath = id_map[clean_key]
+            
+            # 尝试 3: 保底方案 (如果没有地图，尝试硬拼)
+            if not real_filepath:
+                model = "unknown"
+                if "dalle3" in filename: model = "dalle3"
+                elif "sdxl" in filename: model = "sdxl_turbo"
+                elif "dreamshaper" in filename: model = "dreamshaper"
+                elif "sd15" in filename: model = "sd15"
+                # 盲猜路径
+                real_filepath = f"ai-rating-images/{model}/{filename}"
+
+            # --- 提取模型名用于显示 ---
+            model_display = "unknown"
+            if "dalle3" in str(real_filepath): model_display = "dalle3"
+            elif "sdxl" in str(real_filepath): model_display = "sdxl_turbo"
+            elif "dreamshaper" in str(real_filepath): model_display = "dreamshaper"
+            elif "sd15" in str(real_filepath): model_display = "sd15"
+
             image_list.append({
-                "filepath": full_path,
-                "filename": filename,
+                "filepath": real_filepath, # Cloudinary 真实地址
+                "filename": filename,      # 我们的 Prompt ID
                 "prompt": prompt,
-                "model": model
+                "model": model_display
             })
             
         return image_list
     except Exception as e:
-        st.error(f"读取本地 JSON 失败: {e}")
+        st.error(f"读取数据失败: {e}")
         return []
 
 # ===== 🌐 生成图片链接 =====
@@ -293,6 +328,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

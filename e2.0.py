@@ -28,7 +28,7 @@ cloudinary.config(
 BASE_DIR = os.getcwd()
 METADATA_DIR = os.path.join(BASE_DIR, "data_storage", "metadata")
 # 本地 Prompt 文件路径 (作为图片源)
-LOCAL_PROMPT_JSON = os.path.join(BASE_DIR, "final_prompts_translated.json")
+LOCAL_PROMPT_JSON = os.path.join(BASE_DIR, "cloudinary_image_map.json")
 
 # 确保目录存在
 os.makedirs(METADATA_DIR, exist_ok=True)
@@ -293,5 +293,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

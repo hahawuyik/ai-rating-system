@@ -187,7 +187,7 @@ def get_image_url(filepath):
             width=800, 
             crop="limit", 
             quality="auto", 
-            fetch_format="auto", 
+            format="jpg", 
             secure=True
         )
         return url
@@ -329,6 +329,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
